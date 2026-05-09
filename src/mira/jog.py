@@ -173,27 +173,36 @@ def _jog_loop(stdscr, _cfg: Config, mount: CelestronMount) -> int:
 
         stdscr.refresh()
 
-    def jog(d_ra_deg: float, d_dec_deg: float, label: str) -> None:
-        pos = _safe_get_position(mount)
-        if pos is None:
-            post("no position")
-            return
-        ra0, dec0 = pos
-        target_ra = (ra0 + d_ra_deg) % 360.0
-        target_dec = _clamp_dec(dec0 + d_dec_deg)
-        post(f"slewing {label} ({state.step_deg:+.2f} deg)")
+    # Mapping arrow direction -> INDI motion switch payload.
+    # Using TELESCOPE_MOTION_NS / TELESCOPE_MOTION_WE bypasses the firmware's
+    # coordinate-based horizon guard. The mount drives motors directly,
+    # exactly like pressing direction buttons on the hand controller.
+    _MOTION_PROPS = {
+        "north": ("TELESCOPE_MOTION_NS", "MOTION_NORTH", "MOTION_SOUTH"),
+        "south": ("TELESCOPE_MOTION_NS", "MOTION_SOUTH", "MOTION_NORTH"),
+        "east":  ("TELESCOPE_MOTION_WE", "MOTION_EAST",  "MOTION_WEST"),
+        "west":  ("TELESCOPE_MOTION_WE", "MOTION_WEST",  "MOTION_EAST"),
+    }
+
+    def jog(direction: str) -> None:
+        prop, on_key, off_key = _MOTION_PROPS[direction]
+        # Duration scales with step. ~0.3 sec per degree at slew rate 5
+        # (the default); adjusted by rate roughly linearly.
+        duration_s = max(0.05, min(3.0, state.step_deg * 0.4))
+        post(f"motoring {direction} ({state.step_deg:.2f} deg, ~{duration_s:.2f}s)")
         render()
         try:
-            ok = mount.slew_to(target_ra, target_dec, timeout=30.0)
-            new = _safe_get_position(mount)
-            if not ok:
-                post(f"REFUSED {label}: mount did not move (firmware horizon limit?)")
-            elif new is not None:
-                post(f"arrived: {_format_radec(*new)}")
-            else:
-                post("slew issued")
+            mount.client.set_switch(prop, {on_key: True, off_key: False})
+            time.sleep(duration_s)
+            mount.client.set_switch(prop, {on_key: False, off_key: False})
         except MountError as e:
-            post(f"slew error: {e}")
+            post(f"motor error: {e}")
+            return
+        # Brief wait for the position poll to refresh, then report.
+        time.sleep(0.6)
+        new = _safe_get_position(mount)
+        if new is not None:
+            post(f"now: {_format_radec(*new)}")
 
     last_render = 0.0
     while True:
@@ -213,13 +222,13 @@ def _jog_loop(stdscr, _cfg: Config, mount: CelestronMount) -> int:
         if key in (ord("q"), ord("Q")):
             return 0
         elif key == curses.KEY_UP:
-            jog(0.0, +state.step_deg, "north")
+            jog("north")
         elif key == curses.KEY_DOWN:
-            jog(0.0, -state.step_deg, "south")
+            jog("south")
         elif key == curses.KEY_RIGHT:
-            jog(+state.step_deg, 0.0, "east")
+            jog("east")
         elif key == curses.KEY_LEFT:
-            jog(-state.step_deg, 0.0, "west")
+            jog("west")
         elif key in (ord("+"), ord("=")):
             state.step_index = min(len(STEP_LADDER) - 1, state.step_index + 1)
             state.step_deg = STEP_LADDER[state.step_index]
