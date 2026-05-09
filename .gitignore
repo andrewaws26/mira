@@ -1,0 +1,120 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checkers and linters
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Mira runtime data (lives alongside the repo)
+captures/
+state.db
+state.db-journal
+state.db-wal
+state.db-shm
+mira.log
+mira.log.*
+config.yaml
+
+# ASTAP star databases (multi-GB, downloaded once)
+*.001
+*.290
+*.1476
+h17/
+h18/
+g17/
+g18/
+v17/
+*.h17
+*.h18
+
+# Skyfield ephemeris cache
+de421.bsp
+de440.bsp
+de440s.bsp
+*.bsp
+
+# Captured astrophotography
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.fits
+*.fit
+*.fts
+*.cr2
+*.nef
+*.raw
+# allow fixture images explicitly tracked under tests
+!tests/fixtures/*.jpg
+!tests/fixtures/*.png
+!tests/fixtures/*.fits
+!tests/fixtures/*.wcs
+
+# Logs
+*.log
+logs/
+
+# Local configuration overrides
+.env
+.env.local
+*.local.yaml
