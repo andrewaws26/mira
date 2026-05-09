@@ -34,6 +34,7 @@ def main() -> int:
         host=cfg.mount.indi_host,
         port=cfg.mount.indi_port,
         device="Celestron GPS",
+        serial_port=cfg.mount.port or None,
     )
     try:
         mount.connect(timeout=10.0)

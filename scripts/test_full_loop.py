@@ -78,7 +78,11 @@ def main() -> int:
         print(f"[FAIL] {e}")
         return 1
 
-    mount = CelestronMount(host=cfg.mount.indi_host, port=cfg.mount.indi_port)
+    mount = CelestronMount(
+        host=cfg.mount.indi_host,
+        port=cfg.mount.indi_port,
+        serial_port=cfg.mount.port or None,
+    )
     try:
         mount.connect(timeout=10.0)
     except MountError as e:

@@ -234,8 +234,19 @@ class IndiClient:
                     elem = event[1]  # type: ignore[misc]
                     if not isinstance(elem, ET.Element):
                         continue
-                    if elem.tag.startswith("def") or elem.tag.startswith("set"):
-                        self._handle_vector(elem)
+                    # XMLPullParser fires "end" for every element, including
+                    # the inner <defSwitch>, <defNumber>, ... children. We
+                    # only want the outer *Vector wrappers; clearing inner
+                    # elements would discard their attributes before the
+                    # outer end event arrives. Top-level vectors all end in
+                    # "Vector"; <message> and <getProperties> we ignore.
+                    is_vector = (
+                        (elem.tag.startswith("def") or elem.tag.startswith("set"))
+                        and elem.tag.endswith("Vector")
+                    )
+                    if not is_vector:
+                        continue
+                    self._handle_vector(elem)
                     elem.clear()
         finally:
             try:
@@ -343,8 +354,34 @@ class CelestronMount:
         if not prop.get_switch("CONNECT"):
             self._client.set_switch(self.PROP_CONNECTION, {"CONNECT": True, "DISCONNECT": False})
             self._client.wait_for_state(self.PROP_CONNECTION, STATE_OK, timeout=timeout)
-        # Wait for coord vector so we know the driver is fully alive.
+        # Wait for the coord vector to be defined, then wait for its first
+        # real update from the mount poll. Without this, the def's initial
+        # RA=0/DEC=0 placeholders are what get_position returns to a caller
+        # that runs immediately after connect().
         self._client.wait_for_property(self.PROP_COORD, timeout=timeout)
+        self._wait_for_coord_poll(timeout=timeout)
+
+    def _wait_for_coord_poll(self, timeout: float = 10.0) -> None:
+        """Block until the driver has pushed at least one set of EQUATORIAL_EOD_COORD
+        from the mount (as opposed to the def's initial 0/0 placeholder).
+
+        The driver polls position roughly once per second after CONNECTION
+        goes Ok. Returns once we observe a setNumberVector update.
+        """
+        prop = self._client.get_property(self.PROP_COORD)
+        baseline_ts = prop.timestamp if prop is not None else 0.0
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            prop = self._client.get_property(self.PROP_COORD)
+            if prop is None:
+                continue
+            if prop.timestamp > baseline_ts:
+                return
+        logger.warning(
+            "EQUATORIAL_EOD_COORD did not see an update within %.1fs; "
+            "position may be stale until next poll", timeout
+        )
 
     def disconnect(self) -> None:
         try:
@@ -361,14 +398,35 @@ class CelestronMount:
         prop = self._client.get_property(self.PROP_CONNECTION)
         return prop is not None and prop.get_switch("CONNECT")
 
-    def get_position(self) -> tuple[float, float]:
-        """Return current pointing as (RA degrees, Dec degrees)."""
-        prop = self._client.get_property(self.PROP_COORD)
-        if prop is None:
-            raise MountNotConnected("EQUATORIAL_EOD_COORD not yet defined")
-        ra_hours = prop.get_number("RA")
-        dec_deg = prop.get_number("DEC")
-        return ra_hours * 15.0, dec_deg
+    def get_position(self, timeout: float = 5.0) -> tuple[float, float]:
+        """Return current pointing as (RA degrees, Dec degrees).
+
+        Waits up to `timeout` seconds for the driver to populate RA/DEC
+        elements on EQUATORIAL_EOD_COORD. The property is defined as soon as
+        the driver loads but the actual values arrive after the first
+        handshake roundtrip with the mount, which can be several hundred
+        milliseconds.
+        """
+        deadline = time.monotonic() + timeout
+        last_err: Optional[Exception] = None
+        while time.monotonic() < deadline:
+            prop = self._client.get_property(self.PROP_COORD)
+            if prop is None:
+                time.sleep(0.1)
+                continue
+            try:
+                ra_hours = prop.get_number("RA")
+                dec_deg = prop.get_number("DEC")
+                return ra_hours * 15.0, dec_deg
+            except KeyError as e:
+                last_err = e
+                time.sleep(0.1)
+        if last_err is not None:
+            raise MountTimeoutError(
+                f"EQUATORIAL_EOD_COORD did not populate RA/DEC within {timeout}s; "
+                f"is the mount powered and aligned?"
+            )
+        raise MountNotConnected("EQUATORIAL_EOD_COORD not yet defined")
 
     def is_slewing(self) -> bool:
         prop = self._client.get_property(self.PROP_COORD)
