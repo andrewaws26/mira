@@ -2,6 +2,16 @@
 
 Out of scope for v0.1.0. Listed in rough priority order, but feel free to pull from anywhere.
 
+## Done since v0.1.0 (kept here as a reminder of scope evolution)
+
+- [x] ElevenLabs TTS integration with eleven_v3, audio tags, streaming PCM via ffplay.
+- [x] Stargazing-tuned persona (Spanglish register, excited-teacher inflection) baked into MCP server `instructions`.
+- [x] `mira preview` live iPhone feed via ffplay for eyepiece alignment.
+- [x] `mira jog` curses TUI for keyboard-driven mount nudging.
+- [x] `mira gps-push` to feed observer location and UTC into the mount (best-effort; Celestron firmware locks this post-alignment).
+- [x] Auto-pushing observer info on every `mount.connect()` via ToolContext.
+- [x] MCP server registered as a user-scope Claude Code MCP via `claude mcp add`.
+
 ## Capability
 
 - [ ] Local LLM fallback via Ollama for fully offline conversational use. v0.1.0 routes all conversational use through Claude Code; a portable backup matters at dark sky sites with no signal.
@@ -20,6 +30,7 @@ Out of scope for v0.1.0. Listed in rough priority order, but feel free to pull f
 - [ ] Park position support. `mira park` slews to a configured safe stow attitude.
 - [ ] Cooldown sequence on shutdown. Cap, wait for thermal equilibrium with ambient, then power down.
 - [ ] Weather and cloud integration. Skip targets behind known clouds via a sky-quality meter or webcam analysis. Local National Weather Service feeds work.
+- [ ] Auto-detect observer location via macOS CoreLocation (PyObjC), so the user does not have to hand-edit lat/lon in config when traveling to a dark site.
 
 ## Interface
 
@@ -27,6 +38,7 @@ Out of scope for v0.1.0. Listed in rough priority order, but feel free to pull f
 - [ ] Voice activation directly on the Mac (without going through Claude Code).
 - [ ] Auto-pull of recent capture thumbnails to a local web gallery.
 - [ ] Live-stack preview during exposure runs.
+- [ ] In `mira jog`, hold-to-slew via TELESCOPE_MOTION_NS / MOTION_WE switches instead of step-per-keypress, for smoother feel during fine centering.
 
 ## Catalog
 

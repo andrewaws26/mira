@@ -20,12 +20,20 @@ from typing import Optional
 from .camera import Camera, CameraError
 from .config import Config, load_config, setup_logging
 from .ephemeris import Ephemeris, NameNotFoundError, get_ephemeris
-from .mount import CelestronMount, MountError
+from .mount import CelestronMount, MountError, ObserverInfo
 from .solver import SolveFailed, Solver, SolverError
 from .speech import SpeechError, Speaker
 from .state import StateDB
 
 logger = logging.getLogger(__name__)
+
+
+def _local_utc_offset_hours() -> float:
+    """Local timezone offset from UTC, in hours. Positive east of UTC."""
+    import time as _time
+    if _time.daylight and _time.localtime().tm_isdst:
+        return -_time.altzone / 3600.0
+    return -_time.timezone / 3600.0
 
 
 @dataclass
@@ -57,6 +65,12 @@ class ToolContext:
             host=cfg.mount.indi_host,
             port=cfg.mount.indi_port,
             serial_port=cfg.mount.port or None,
+            observer=ObserverInfo(
+                latitude_deg=cfg.observer.latitude,
+                longitude_deg=cfg.observer.longitude,
+                elevation_m=cfg.observer.elevation_m,
+                utc_offset_hours=_local_utc_offset_hours(),
+            ),
         )
         camera = Camera(
             device_name=cfg.camera.device_name,

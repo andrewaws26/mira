@@ -175,6 +175,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="wait for playback to finish before returning",
     )
 
+    p_gps = sub.add_parser(
+        "gps-push",
+        help="push observer location and current UTC to the mount",
+        description=(
+            "Send the configured observer latitude / longitude / elevation "
+            "and the current UTC time to the mount's GEOGRAPHIC_COORD and "
+            "TIME_UTC properties. Mira's plate-solve workflow does not "
+            "require this, but the hand controller's standalone GoTo does. "
+            "ToolContext also pushes these automatically on every connect."
+        ),
+    )
+    _ = p_gps
+
     p_jog = sub.add_parser(
         "jog",
         help="keyboard control of the mount (curses TUI)",
@@ -463,6 +476,34 @@ def cmd_voices(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_gps_push(args: argparse.Namespace) -> int:
+    ctx = _build_context(args)
+    try:
+        ctx.connect_mount()
+        # connect_mount() already invokes set_observer_info via mount.connect(),
+        # but call it explicitly so the user sees a pass/fail line.
+        from .tools import _local_utc_offset_hours
+
+        ok = ctx.mount.set_observer_info(
+            lat_deg=ctx.config.observer.latitude,
+            lon_deg=ctx.config.observer.longitude,
+            elev_m=ctx.config.observer.elevation_m,
+            utc_offset_hours=_local_utc_offset_hours(),
+        )
+        if ok:
+            print(
+                f"pushed observer ({ctx.config.observer.latitude:.4f}, "
+                f"{ctx.config.observer.longitude:.4f}) elev={ctx.config.observer.elevation_m}m"
+                f" and current UTC to the mount."
+            )
+            return EXIT_OK
+        else:
+            print("partial push; check mira.log for which property failed.")
+            return EXIT_FAILURE
+    finally:
+        ctx.shutdown()
+
+
 def cmd_jog(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -505,6 +546,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "say":      cmd_say,
     "voices":   cmd_voices,
     "jog":      cmd_jog,
+    "gps-push": cmd_gps_push,
 }
 
 

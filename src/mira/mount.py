@@ -24,6 +24,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,15 @@ STATE_IDLE = "Idle"
 STATE_OK = "Ok"
 STATE_BUSY = "Busy"
 STATE_ALERT = "Alert"
+
+
+@dataclass
+class ObserverInfo:
+    """Observer location and UTC offset to push to the mount on connect."""
+    latitude_deg: float
+    longitude_deg: float
+    elevation_m: float = 0.0
+    utc_offset_hours: float = 0.0
 
 
 @dataclass
@@ -310,6 +320,8 @@ class CelestronMount:
     PROP_ON_COORD_SET = "ON_COORD_SET"
     PROP_ABORT = "TELESCOPE_ABORT_MOTION"
     PROP_DEVICE_PORT = "DEVICE_PORT"
+    PROP_GEOGRAPHIC_COORD = "GEOGRAPHIC_COORD"
+    PROP_TIME_UTC = "TIME_UTC"
 
     def __init__(
         self,
@@ -317,12 +329,14 @@ class CelestronMount:
         port: int = 7624,
         device: str = "Celestron GPS",
         serial_port: str | None = None,
+        observer: Optional["ObserverInfo"] = None,
     ) -> None:
         self._client = IndiClient(host=host, port=port, device=device)
         self.host = host
         self.port = port
         self.device = device
         self.serial_port = serial_port
+        self.observer = observer
 
     @property
     def client(self) -> IndiClient:
@@ -360,6 +374,15 @@ class CelestronMount:
         # that runs immediately after connect().
         self._client.wait_for_property(self.PROP_COORD, timeout=timeout)
         self._wait_for_coord_poll(timeout=timeout)
+        # Push observer location and time so the mount's own goto / horizon
+        # / tracking math has correct inputs.
+        if self.observer is not None:
+            self.set_observer_info(
+                lat_deg=self.observer.latitude_deg,
+                lon_deg=self.observer.longitude_deg,
+                elev_m=self.observer.elevation_m,
+                utc_offset_hours=self.observer.utc_offset_hours,
+            )
 
     def _wait_for_coord_poll(self, timeout: float = 10.0) -> None:
         """Block until the driver has pushed at least one set of EQUATORIAL_EOD_COORD
@@ -493,6 +516,59 @@ class CelestronMount:
             self._client.set_switch(self.PROP_ABORT, {"ABORT": True})
         except MountError as e:
             logger.warning("ABORT failed: %s", e)
+
+    def set_observer_info(
+        self,
+        lat_deg: float,
+        lon_deg: float,
+        elev_m: float = 0.0,
+        when: Optional[datetime] = None,
+        utc_offset_hours: float = 0.0,
+    ) -> bool:
+        """Push observer location and current UTC to the mount.
+
+        The Celestron driver exposes GEOGRAPHIC_COORD and TIME_UTC after
+        CONNECTION reaches Ok. Pushing accurate values lets the mount's
+        own firmware compute meridian flips, horizon limits, and
+        tracking rates correctly. Mira's plate-solve workflow does not
+        require this; it is a quality-of-life nudge for the hand
+        controller's standalone goto.
+
+        Important Celestron-firmware quirk: once the hand controller has
+        completed an alignment, it locks its internal location/time and
+        the driver's GEOGRAPHIC_COORD vector goes to state=Alert when
+        you try to override. The push is sent and accepted at the INDI
+        protocol layer, but the mount silently rejects it. This is not
+        a Mira bug; it is by design in Celestron's firmware. To force
+        new values, undo alignment via the hand controller first.
+
+        Returns True on best-effort protocol success; the mount may still
+        ignore the values.
+        """
+        ok = True
+        try:
+            self._client.set_number(
+                self.PROP_GEOGRAPHIC_COORD,
+                {"LAT": float(lat_deg), "LONG": float(lon_deg), "ELEV": float(elev_m)},
+            )
+        except MountError as e:
+            logger.warning("GEOGRAPHIC_COORD push failed: %s", e)
+            ok = False
+        moment = when if when is not None else datetime.now(timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        try:
+            self._client.set_text(
+                self.PROP_TIME_UTC,
+                {
+                    "UTC": moment.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "OFFSET": f"{float(utc_offset_hours):.2f}",
+                },
+            )
+        except MountError as e:
+            logger.warning("TIME_UTC push failed: %s", e)
+            ok = False
+        return ok
 
     def _set_coord_mode(self, mode: str) -> None:
         """Set ON_COORD_SET to TRACK, SLEW, or SYNC."""

@@ -159,6 +159,7 @@ class TestCommandsTable:
         expected = {
             "goto", "sync", "where", "capture", "solve", "status",
             "devices", "resolve", "preview", "say", "voices", "jog",
+            "gps-push",
         }
         assert set(COMMANDS.keys()) == expected
 

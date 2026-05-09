@@ -215,8 +215,8 @@ chmod 600 ~/mira/.env
 Edit at minimum:
 
 - `observer.latitude` and `observer.longitude` for your location
-- `mount.port` to the path you found in step 7
-- `solver.astap_path` if ASTAP is not at `/usr/local/bin/astap`. On Apple Silicon Homebrew it is usually at `/opt/homebrew/bin/astap`.
+- `mount.port` to the path you found in step 7. **Use the `cu.` form, not `tty.`**, on macOS. The Celestron INDI driver auto-saves `cu.usbserial-XXX` and overriding with the `tty.` variant changes the open semantics in a way the driver cannot handle (CONNECT will succeed but the mount handshake will silently fail).
+- `solver.astap_path` if ASTAP is not at `/usr/local/bin/astap`. On Apple Silicon Homebrew it is usually at `/Applications/ASTAP.app/Contents/MacOS/astap`.
 
 Verify the config loads:
 
@@ -337,6 +337,14 @@ mira goto "Orion Nebula"
 
 # Show mount status, last sync, last slew.
 mira status
+
+# Keyboard control of the mount: arrows nudge, +/- step size,
+# 1-9 slew rate, space aborts, q quits.
+mira jog
+
+# Push observer location and current UTC to the mount (one shot).
+# Note: the mount's hand controller rejects this once it has been aligned.
+mira gps-push
 ```
 
 Run `mira <command> --help` for per-subcommand options.
