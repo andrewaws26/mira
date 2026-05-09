@@ -61,3 +61,11 @@ speech:
   voice_id: EXAVITQu4vr4xnSDxMaL  # Sarah: mature, reassuring, confident
   model_id: eleven_multilingual_v2
   blocking: false          # true makes the CLI wait for playback to finish
+  # Voice expression knobs.
+  # stability: 0.0-1.0; lower = more inflection, higher = more even/monotone
+  # style:     0.0-1.0; higher = more emotional exaggeration
+  # similarity_boost: 0.0-1.0; how closely to match the source voice
+  stability: 0.30
+  similarity_boost: 0.75
+  style: 0.55
+  use_speaker_boost: true

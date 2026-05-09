@@ -412,7 +412,16 @@ def cmd_say(args: argparse.Namespace) -> int:
 
     text = " ".join(args.text)
     voice = args.voice or cfg.speech.voice_id
-    speaker = Speaker(voice_id=voice, model_id=cfg.speech.model_id)
+    speaker = Speaker(
+        voice_id=voice,
+        model_id=cfg.speech.model_id,
+        voice_settings={
+            "stability": cfg.speech.stability,
+            "similarity_boost": cfg.speech.similarity_boost,
+            "style": cfg.speech.style,
+            "use_speaker_boost": cfg.speech.use_speaker_boost,
+        },
+    )
     try:
         speaker.speak(text, blocking=args.blocking or cfg.speech.blocking)
     except SpeechDisabled as e:

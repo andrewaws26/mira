@@ -78,7 +78,16 @@ class ToolContext:
             elevation_m=cfg.observer.elevation_m,
         )
         speaker = (
-            Speaker(voice_id=cfg.speech.voice_id, model_id=cfg.speech.model_id)
+            Speaker(
+                voice_id=cfg.speech.voice_id,
+                model_id=cfg.speech.model_id,
+                voice_settings={
+                    "stability": cfg.speech.stability,
+                    "similarity_boost": cfg.speech.similarity_boost,
+                    "style": cfg.speech.style,
+                    "use_speaker_boost": cfg.speech.use_speaker_boost,
+                },
+            )
             if cfg.speech.enabled
             else None
         )

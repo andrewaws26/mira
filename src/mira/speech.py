@@ -37,12 +37,16 @@ DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Sarah: mature, reassuring, confiden
 DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 DEFAULT_ENV_FILE = Path("~/mira/.env").expanduser()
 
-# Voice settings tuned for a calm observing companion. Higher stability gives a
-# more even tone; moderate similarity preserves character.
+# Voice settings tuned for a calm-but-not-flat observing companion.
+#   stability       lower = more inflection, higher = more even/monotone
+#   style           higher = more emotional exaggeration
+#   similarity_boost  how closely to match the source voice character
+# These defaults give Vega room to inflect on discourse markers ("Mira,"
+# "ahi", "listo") without going theatrical.
 DEFAULT_VOICE_SETTINGS = {
-    "stability": 0.55,
+    "stability": 0.30,
     "similarity_boost": 0.75,
-    "style": 0.15,
+    "style": 0.55,
     "use_speaker_boost": True,
 }
 
