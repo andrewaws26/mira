@@ -202,12 +202,16 @@ class Speaker:
         retries with `fallback_model_id`. The fallback only triggers if the
         primary model is v3 and the fallback differs from it.
         """
+        # ffplay 7+ replaced -ac with -ch_layout. Use the new spelling so we
+        # work on current Homebrew (ffmpeg 8). Older ffplay (<=6) tolerates
+        # this flag too via -ac fallback chain, so no version branch needed
+        # in the Mira-supported toolchain.
         ffplay = subprocess.Popen(
             [
                 "ffplay",
                 "-f", "s16le",
                 "-ar", str(STREAM_SAMPLE_RATE),
-                "-ac", "1",
+                "-ch_layout", "mono",
                 "-nodisp",
                 "-autoexit",
                 "-loglevel", "quiet",

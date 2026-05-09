@@ -73,6 +73,8 @@ state.db-shm
 mira.log
 mira.log.*
 config.yaml
+indiserver.pid
+indiserver.log
 
 # ASTAP star databases (multi-GB, downloaded once)
 *.001
