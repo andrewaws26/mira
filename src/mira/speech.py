@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -137,6 +138,11 @@ class Speaker:
         self.api_key = resolve_api_key(self.api_key)
         if self.voice_settings is None:
             self.voice_settings = dict(DEFAULT_VOICE_SETTINGS)
+        # Serialize playback so concurrent speak() calls do not stack on top
+        # of each other. Each call waits for the previously launched player
+        # subprocess to finish before launching its own.
+        self._play_lock = threading.Lock()
+        self._active_proc: Optional[subprocess.Popen] = None
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
@@ -182,6 +188,11 @@ class Speaker:
         Prefers a streaming-PCM path through ffplay (lower latency, no temp
         file). Falls back to MP3 + afplay if ffplay is not on PATH. Returns
         the temp-file path used by the fallback path, or None for streaming.
+
+        Concurrent calls are serialized: each call waits for the prior
+        playback subprocess to finish before launching its own. This keeps
+        two utterances from playing on top of each other when callers fire
+        say() in parallel.
         """
         if not text or not text.strip():
             raise SpeechError("nothing to speak")
@@ -189,12 +200,27 @@ class Speaker:
             raise SpeechDisabled(
                 "ELEVENLABS_API_KEY not set. Add it to ~/mira/.env or export it."
             )
-        if shutil.which("ffplay") is not None:
-            self._stream_to_ffplay(text, blocking=blocking)
-            return None
-        return self._mp3_via_afplay(text, blocking=blocking)
+        with self._play_lock:
+            prior = self._active_proc
+            if prior is not None and prior.poll() is None:
+                try:
+                    prior.wait()
+                except Exception:  # noqa: BLE001
+                    logger.warning("waiting for prior playback failed", exc_info=True)
+            if shutil.which("ffplay") is not None:
+                proc = self._stream_to_ffplay(text)
+                path: Optional[Path] = None
+            else:
+                proc, path = self._mp3_via_afplay(text)
+            self._active_proc = proc
+        if blocking and proc is not None:
+            proc.wait()
+            if path is not None:
+                _safe_unlink(path)
+                return None
+        return path
 
-    def _stream_to_ffplay(self, text: str, blocking: bool) -> None:
+    def _stream_to_ffplay(self, text: str) -> subprocess.Popen:
         """Stream PCM from ElevenLabs straight into ffplay's stdin.
 
         Tries the configured model first; on HTTP failure (typical: 403 from
@@ -240,16 +266,25 @@ class Speaker:
                     if attempt < len(models_to_try) - 1:
                         logger.warning("model %s failed (%s); falling back to %s", model, e, models_to_try[attempt + 1])
                         continue
+                    # Synthesis failed on every model. Tear down ffplay so we
+                    # do not leak the subprocess back to the caller.
+                    try:
+                        ffplay.stdin.close()
+                    except (OSError, BrokenPipeError):
+                        pass
+                    try:
+                        ffplay.terminate()
+                    except OSError:
+                        pass
                     raise
         finally:
             try:
                 ffplay.stdin.close()
             except (OSError, BrokenPipeError):
                 pass
-        if blocking:
-            ffplay.wait()
         if last_err is not None:
             raise last_err
+        return ffplay
 
     def _stream_one(self, text: str, model_id: str, sink) -> None:
         # v3 (alpha) rejects optimize_streaming_latency with HTTP 400
@@ -295,7 +330,7 @@ class Speaker:
         except urllib.error.URLError as e:
             raise SpeechError(f"ElevenLabs unreachable: {e.reason}") from e
 
-    def _mp3_via_afplay(self, text: str, blocking: bool) -> Optional[Path]:
+    def _mp3_via_afplay(self, text: str) -> tuple[subprocess.Popen, Path]:
         audio = self.synthesize(text)
         fd, name = tempfile.mkstemp(suffix=".mp3", prefix="mira-speech-")
         try:
@@ -306,17 +341,13 @@ class Speaker:
             raise
         path = Path(name)
         try:
-            if blocking:
-                subprocess.run(["afplay", str(path)], check=False)
-                _safe_unlink(path)
-                return None
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["afplay", str(path)],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            return path
+            return proc, path
         except FileNotFoundError as e:
             _safe_unlink(path)
             raise SpeechError(

@@ -97,3 +97,102 @@ class TestSpeaker:
         s = Speaker(api_key="x")
         with pytest.raises(Exception):
             s.synthesize("")
+
+
+class _FakeProc:
+    """Stand-in for subprocess.Popen used by Speaker. Tracks wait()/poll()."""
+
+    def __init__(self, duration: float = 0.0) -> None:
+        import time
+
+        self._end = time.monotonic() + duration
+        self._waited = False
+        self._time = time
+
+    def poll(self):
+        if self._time.monotonic() >= self._end:
+            return 0
+        return None
+
+    def wait(self):
+        self._waited = True
+        # Advance to "completed" state so subsequent poll() returns 0.
+        self._end = self._time.monotonic()
+        return 0
+
+
+class TestSpeakerSerialization:
+    """The bug: parallel say() calls used to spawn overlapping ffplay
+    instances. The fix: Speaker holds a per-instance lock and waits on
+    the prior playback subprocess before launching a new one.
+    """
+
+    def test_speak_waits_for_prior_proc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        s = Speaker(api_key="x")
+        prior = _FakeProc(duration=10.0)
+        s._active_proc = prior
+        spawned: list[_FakeProc] = []
+
+        def fake_stream_to_ffplay(self_, text):  # noqa: ARG001
+            new = _FakeProc()
+            spawned.append(new)
+            return new
+
+        monkeypatch.setattr("mira.speech.shutil.which", lambda _: "/usr/bin/ffplay")
+        monkeypatch.setattr(Speaker, "_stream_to_ffplay", fake_stream_to_ffplay)
+
+        s.speak("hola")
+
+        assert prior._waited is True, "speak() must wait for the prior playback"
+        assert s._active_proc is spawned[0]
+
+    def test_speak_skips_wait_when_prior_already_done(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        s = Speaker(api_key="x")
+        prior = _FakeProc(duration=0.0)  # already completed
+        s._active_proc = prior
+
+        def fake_stream_to_ffplay(self_, text):  # noqa: ARG001
+            return _FakeProc()
+
+        monkeypatch.setattr("mira.speech.shutil.which", lambda _: "/usr/bin/ffplay")
+        monkeypatch.setattr(Speaker, "_stream_to_ffplay", fake_stream_to_ffplay)
+
+        s.speak("hola")
+
+        assert prior._waited is False, "no need to wait on a finished proc"
+
+    def test_parallel_speak_calls_serialize(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two threads calling speak() at once must not both hold ffplay
+        live at the same instant. We assert by checking that the first
+        call's proc gets wait()-ed before the second call records its own
+        as active."""
+        import threading
+        import time
+
+        s = Speaker(api_key="x")
+        order: list[str] = []
+        spawn_lock = threading.Lock()
+
+        def fake_stream_to_ffplay(self_, text):  # noqa: ARG001
+            with spawn_lock:
+                order.append(f"spawn:{text}")
+            return _FakeProc(duration=0.05)
+
+        monkeypatch.setattr("mira.speech.shutil.which", lambda _: "/usr/bin/ffplay")
+        monkeypatch.setattr(Speaker, "_stream_to_ffplay", fake_stream_to_ffplay)
+
+        def call(label):
+            s.speak(label)
+
+        t1 = threading.Thread(target=call, args=("first",))
+        t2 = threading.Thread(target=call, args=("second",))
+        t1.start()
+        time.sleep(0.005)
+        t2.start()
+        t1.join()
+        t2.join()
+
+        # Both spawned, in start order, with no interleaving inside speak().
+        assert order == ["spawn:first", "spawn:second"]
