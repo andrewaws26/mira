@@ -175,6 +175,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="wait for playback to finish before returning",
     )
 
+    p_jog = sub.add_parser(
+        "jog",
+        help="keyboard control of the mount (curses TUI)",
+        description=(
+            "Open a curses TUI to nudge the mount with the keyboard. "
+            "Arrow keys slew by the current step size, +/- adjust step, "
+            "1-9 set slew rate, space aborts, s syncs, q quits. Requires "
+            "indiserver running and the mount connected."
+        ),
+    )
+    _ = p_jog
+
     p_voices = sub.add_parser(
         "voices",
         help="list ElevenLabs voices on this account",
@@ -451,6 +463,16 @@ def cmd_voices(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_jog(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .jog import run_jog
+
+    return run_jog(cfg)
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -482,6 +504,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "preview":  cmd_preview,
     "say":      cmd_say,
     "voices":   cmd_voices,
+    "jog":      cmd_jog,
 }
 
 

@@ -158,7 +158,7 @@ class TestCommandsTable:
     def test_all_subcommands_have_handlers(self) -> None:
         expected = {
             "goto", "sync", "where", "capture", "solve", "status",
-            "devices", "resolve", "preview", "say", "voices",
+            "devices", "resolve", "preview", "say", "voices", "jog",
         }
         assert set(COMMANDS.keys()) == expected
 
