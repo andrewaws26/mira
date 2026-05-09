@@ -467,37 +467,60 @@ class CelestronMount:
         Returns False if:
           - the slew was aborted via abort()
           - wait_slew_complete timed out
-          - the mount's reported position after settling differs from the
-            requested coords by more than SLEW_ARRIVAL_TOLERANCE_DEG.
+          - the mount moved less than 50 percent of the requested distance
+            (catches silent firmware refusals: mount accepts the command
+            but refuses to drive the motors, common when the target is
+            below the horizon, near the meridian danger zone, or when the
+            alignment is fake). The 50 percent rule scales naturally with
+            slew size, unlike a fixed-degrees tolerance.
 
-        The third case catches silent refusals from the Celestron firmware:
-        when the mount considers the target below the horizon or otherwise
-        unreachable (common with a fake alignment), it accepts the slew at
-        the INDI layer but refuses to move the motors. EQUATORIAL_EOD_COORD
-        may not enter Busy at all, or may flip Busy then Ok without motion.
-        Without this delta check, slew_to returned True for slews that
-        physically did nothing.
+        On a no-op slew (target very close to current pointing), both the
+        requested distance and moved distance are tiny and we pass.
         """
         self._abort_pending = False
+        # Capture the starting position so we can compare moved-vs-requested.
+        try:
+            ra_start, dec_start = self.get_position(timeout=3.0)
+        except MountError:
+            ra_start = ra_deg  # if we can't read, skip the move check
+            dec_start = dec_deg
+        requested_dist = _angular_separation(ra_start, dec_start, ra_deg, dec_deg)
+
         self._set_coord_mode("TRACK")
         self._send_target(ra_deg, dec_deg)
         if not self.wait_slew_complete(timeout=timeout):
             return False
-        # Verify the mount actually arrived. The driver polls position
-        # roughly once per second; give it one cycle to refresh.
+        # Driver polls position roughly once per second; give it a cycle.
         time.sleep(1.0)
         try:
             ra_now, dec_now = self.get_position(timeout=3.0)
         except MountError:
             return False
-        err = _angular_separation(ra_now, dec_now, ra_deg, dec_deg)
-        if err > self.SLEW_ARRIVAL_TOLERANCE_DEG:
+        moved = _angular_separation(ra_start, dec_start, ra_now, dec_now)
+        err_to_target = _angular_separation(ra_now, dec_now, ra_deg, dec_deg)
+
+        # Fixed-tolerance pass for genuinely no-op slews (sub-arcminute).
+        if requested_dist < 0.02 and err_to_target < self.SLEW_ARRIVAL_TOLERANCE_DEG:
+            return True
+
+        # For real slews, require at least 50 percent of requested motion.
+        if moved < 0.5 * requested_dist:
             logger.warning(
-                "slew_to(%g, %g) reported complete but mount is %.3f deg "
-                "from target (current %g, %g). Likely refused by firmware "
-                "(horizon/zenith/cable-wrap limit, parked state, or "
-                "alignment mismatch).",
-                ra_deg, dec_deg, err, ra_now, dec_now,
+                "slew_to(%g, %g) reported complete but mount only moved "
+                "%.3f deg of %.3f deg requested (current %g, %g; err to "
+                "target %.3f deg). Likely refused by firmware (horizon / "
+                "zenith / cable-wrap limit, parked state, or alignment "
+                "mismatch).",
+                ra_deg, dec_deg, moved, requested_dist, ra_now, dec_now, err_to_target,
+            )
+            return False
+        # Optional secondary check: even if we moved most of the way, the
+        # final landing should be within tolerance.
+        if err_to_target > self.SLEW_ARRIVAL_TOLERANCE_DEG:
+            logger.warning(
+                "slew_to(%g, %g) landed %.3f deg from target after moving "
+                "%.3f deg. Tracking drift or partial refusal.",
+                ra_deg, dec_deg, err_to_target, moved,
             )
             return False
         return True

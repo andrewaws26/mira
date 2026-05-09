@@ -184,9 +184,11 @@ def _jog_loop(stdscr, _cfg: Config, mount: CelestronMount) -> int:
         post(f"slewing {label} ({state.step_deg:+.2f} deg)")
         render()
         try:
-            mount.slew_to(target_ra, target_dec, timeout=30.0)
+            ok = mount.slew_to(target_ra, target_dec, timeout=30.0)
             new = _safe_get_position(mount)
-            if new is not None:
+            if not ok:
+                post(f"REFUSED {label}: mount did not move (firmware horizon limit?)")
+            elif new is not None:
                 post(f"arrived: {_format_radec(*new)}")
             else:
                 post("slew issued")
