@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import urllib.error
@@ -103,15 +104,34 @@ def resolve_api_key(explicit: Optional[str] = None) -> Optional[str]:
     return _load_env_file().get("ELEVENLABS_API_KEY")
 
 
+# Fallback model when v3 fails (livekit#3235-style alpha-endpoint hiccups).
+FALLBACK_MODEL_ID = "eleven_turbo_v2_5"
+
+# Streaming output format. PCM avoids the MP3 encode step on the ElevenLabs
+# side, which independent benchmarks (vexyl.ai, 2026) show drops time-to-
+# first-audio from ~500ms to ~478ms for short utterances.
+STREAM_OUTPUT_FORMAT = "pcm_22050"
+STREAM_SAMPLE_RATE = 22050  # must match STREAM_OUTPUT_FORMAT
+
+
 @dataclass
 class Speaker:
-    """Synthesize and play audio. Construct once, reuse across calls."""
+    """Synthesize and play audio. Construct once, reuse across calls.
+
+    Streaming path (preferred when ffplay is on PATH):
+      ElevenLabs /stream endpoint -> raw PCM 22.05kHz mono ->
+      ffplay -f s16le -ar 22050 -ac 1 -nodisp -autoexit
+    avoids the MP3 encode/decode round-trip and starts playback as the
+    first chunk arrives. Falls back to MP3 -> afplay when ffplay is missing.
+    """
 
     voice_id: str = DEFAULT_VOICE_ID
     model_id: str = DEFAULT_MODEL_ID
     api_key: Optional[str] = None
     timeout: float = 30.0
     voice_settings: Optional[dict] = None
+    optimize_streaming_latency: int = 3  # 0..4; 3 saves ~50-75ms with minor quality cost
+    fallback_model_id: str = FALLBACK_MODEL_ID
 
     def __post_init__(self) -> None:
         self.api_key = resolve_api_key(self.api_key)
@@ -157,15 +177,121 @@ class Speaker:
             raise SpeechError(f"ElevenLabs unreachable: {e.reason}") from e
 
     def speak(self, text: str, blocking: bool = False) -> Optional[Path]:
-        """Synthesize and play `text`. Returns the temp-file path used.
+        """Synthesize and play `text`.
 
-        Args:
-            text: text to speak.
-            blocking: if True, wait for playback to finish before returning.
-
-        The temp file is best-effort cleaned up. On error, no playback occurs
-        and the exception propagates.
+        Prefers a streaming-PCM path through ffplay (lower latency, no temp
+        file). Falls back to MP3 + afplay if ffplay is not on PATH. Returns
+        the temp-file path used by the fallback path, or None for streaming.
         """
+        if not text or not text.strip():
+            raise SpeechError("nothing to speak")
+        if not self.is_configured():
+            raise SpeechDisabled(
+                "ELEVENLABS_API_KEY not set. Add it to ~/mira/.env or export it."
+            )
+        if shutil.which("ffplay") is not None:
+            self._stream_to_ffplay(text, blocking=blocking)
+            return None
+        return self._mp3_via_afplay(text, blocking=blocking)
+
+    def _stream_to_ffplay(self, text: str, blocking: bool) -> None:
+        """Stream PCM from ElevenLabs straight into ffplay's stdin.
+
+        Tries the configured model first; on HTTP failure (typical: 403 from
+        the v3 alpha endpoint hitting a transient rate gate) automatically
+        retries with `fallback_model_id`. The fallback only triggers if the
+        primary model is v3 and the fallback differs from it.
+        """
+        ffplay = subprocess.Popen(
+            [
+                "ffplay",
+                "-f", "s16le",
+                "-ar", str(STREAM_SAMPLE_RATE),
+                "-ac", "1",
+                "-nodisp",
+                "-autoexit",
+                "-loglevel", "quiet",
+                "-i", "-",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if ffplay.stdin is None:
+            raise SpeechError("ffplay stdin not available")
+
+        models_to_try = [self.model_id]
+        if self.model_id == "eleven_v3" and self.fallback_model_id and self.fallback_model_id != self.model_id:
+            models_to_try.append(self.fallback_model_id)
+
+        last_err: Optional[Exception] = None
+        try:
+            for attempt, model in enumerate(models_to_try):
+                try:
+                    self._stream_one(text, model, ffplay.stdin)
+                    last_err = None
+                    break
+                except SpeechError as e:
+                    last_err = e
+                    if attempt < len(models_to_try) - 1:
+                        logger.warning("model %s failed (%s); falling back to %s", model, e, models_to_try[attempt + 1])
+                        continue
+                    raise
+        finally:
+            try:
+                ffplay.stdin.close()
+            except (OSError, BrokenPipeError):
+                pass
+        if blocking:
+            ffplay.wait()
+        if last_err is not None:
+            raise last_err
+
+    def _stream_one(self, text: str, model_id: str, sink) -> None:
+        # v3 (alpha) rejects optimize_streaming_latency with HTTP 400
+        # "unsupported_model". Only attach it for v2-family models where it's
+        # a documented latency optimization.
+        params = [f"output_format={STREAM_OUTPUT_FORMAT}"]
+        if model_id != "eleven_v3":
+            params.append(f"optimize_streaming_latency={self.optimize_streaming_latency}")
+        url = f"{ELEVENLABS_BASE}/text-to-speech/{self.voice_id}/stream?" + "&".join(params)
+        body = json.dumps(
+            {
+                "text": text,
+                "model_id": model_id,
+                "voice_settings": self.voice_settings,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={
+                "xi-api-key": self.api_key or "",
+                "Content-Type": "application/json",
+                "accept": "audio/pcm",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    try:
+                        sink.write(chunk)
+                    except (BrokenPipeError, OSError):
+                        return
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:300]
+            except Exception:  # noqa: BLE001
+                detail = ""
+            raise SpeechError(f"ElevenLabs HTTP {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            raise SpeechError(f"ElevenLabs unreachable: {e.reason}") from e
+
+    def _mp3_via_afplay(self, text: str, blocking: bool) -> Optional[Path]:
         audio = self.synthesize(text)
         fd, name = tempfile.mkstemp(suffix=".mp3", prefix="mira-speech-")
         try:
@@ -180,19 +306,17 @@ class Speaker:
                 subprocess.run(["afplay", str(path)], check=False)
                 _safe_unlink(path)
                 return None
-            else:
-                # detached playback; we leak the temp file, OS reaps it on reboot
-                subprocess.Popen(
-                    ["afplay", str(path)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                return path
+            subprocess.Popen(
+                ["afplay", str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return path
         except FileNotFoundError as e:
             _safe_unlink(path)
             raise SpeechError(
-                "afplay not found. macOS only feature for now."
+                "Neither ffplay nor afplay found. Install ffmpeg or run on macOS."
             ) from e
 
 
