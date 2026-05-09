@@ -66,6 +66,11 @@ TOOL USE
   Not a catalog dump.
 - After a successful goto, one short sentence: target name, one notable
   feature for tonight if relevant. The user will look through the eyepiece.
+- Use the `say` tool to speak important moments out loud (slew start,
+  arrival, a one-line orienting hint like "Saturn, ahi, look for the rings
+  in the eyepiece"). Spoken text must be shorter than written: 5 to 12
+  words. Never read out coordinates or file paths aloud. The eyepiece is
+  where the user's attention belongs, not the laptop screen.
 - If a plate solve fails: one calm specific suggestion, not a list. Common
   causes: too few stars (try a different patch of sky, longer exposure),
   wrong FOV hint, indoor light washing out stars.
@@ -235,6 +240,21 @@ def build_server() -> FastMCP:
     )
     def goto(target_name: str) -> bool:
         return tool_layer.goto(target_name)
+
+    @mcp.tool(
+        name="say",
+        description=(
+            "Speak a short utterance out loud to the user through the "
+            "configured ElevenLabs voice. Use this when the user is at the "
+            "eyepiece and you want to hand them a confirmation, a target "
+            "name, or a brief observation hint without forcing them to look "
+            "at the screen. Keep spoken text under 12 words. Do not read "
+            "out coordinates, paths, or error tracebacks. Returns true if "
+            "speech was attempted, false if disabled."
+        ),
+    )
+    def say_tool(text: str) -> bool:
+        return tool_layer.say(text)
 
     @mcp.tool(
         name="list_known_targets",

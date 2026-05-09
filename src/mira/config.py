@@ -95,6 +95,21 @@ class StorageConfig:
 
 
 @dataclass
+class SpeechConfig:
+    """ElevenLabs TTS settings for spoken output.
+
+    Disabled by default. Enable in config.yaml when you want voice. The API
+    key is read from the ELEVENLABS_API_KEY env var or ~/mira/.env, never
+    from this file.
+    """
+
+    enabled: bool = False
+    voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah
+    model_id: str = "eleven_multilingual_v2"
+    blocking: bool = False  # if True, the CLI waits for playback to finish
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
 
@@ -113,6 +128,7 @@ class Config:
     eyepiece: EyepieceConfig = field(default_factory=EyepieceConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    speech: SpeechConfig = field(default_factory=SpeechConfig)
 
     def validate(self) -> None:
         self.observer.validate()
@@ -213,6 +229,14 @@ def _from_dict(raw: dict) -> Config:
     log_raw = raw.get("logging", {}) or {}
     log_cfg = LoggingConfig(level=str(log_raw.get("level", "INFO")))
 
+    sp_raw = raw.get("speech", {}) or {}
+    speech = SpeechConfig(
+        enabled=bool(sp_raw.get("enabled", False)),
+        voice_id=str(sp_raw.get("voice_id", "EXAVITQu4vr4xnSDxMaL")),
+        model_id=str(sp_raw.get("model_id", "eleven_multilingual_v2")),
+        blocking=bool(sp_raw.get("blocking", False)),
+    )
+
     cfg = Config(
         observer=observer,
         mount=mount,
@@ -221,6 +245,7 @@ def _from_dict(raw: dict) -> Config:
         eyepiece=eyepiece,
         storage=storage,
         logging=log_cfg,
+        speech=speech,
     )
     cfg.validate()
     return cfg

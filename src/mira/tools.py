@@ -22,6 +22,7 @@ from .config import Config, load_config, setup_logging
 from .ephemeris import Ephemeris, NameNotFoundError, get_ephemeris
 from .mount import CelestronMount, MountError
 from .solver import SolveFailed, Solver, SolverError
+from .speech import SpeechError, Speaker
 from .state import StateDB
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class ToolContext:
     camera: Camera
     solver: Solver
     ephemeris: Ephemeris
+    speaker: Optional[Speaker] = None
     session_id: Optional[int] = None
     _mount_connected: bool = field(default=False, init=False, repr=False)
 
@@ -75,6 +77,11 @@ class ToolContext:
             observer_lon_deg=cfg.observer.longitude,
             elevation_m=cfg.observer.elevation_m,
         )
+        speaker = (
+            Speaker(voice_id=cfg.speech.voice_id, model_id=cfg.speech.model_id)
+            if cfg.speech.enabled
+            else None
+        )
         return cls(
             config=cfg,
             state=state,
@@ -82,6 +89,7 @@ class ToolContext:
             camera=camera,
             solver=solver,
             ephemeris=ephemeris,
+            speaker=speaker,
         )
 
     def connect_mount(self, timeout: float = 10.0) -> None:
@@ -124,6 +132,44 @@ def get_default_context() -> ToolContext:
 
 def _ctx(ctx: ToolContext | None) -> ToolContext:
     return ctx if ctx is not None else get_default_context()
+
+
+def _speak(ctx: ToolContext, text: str) -> None:
+    """Best-effort speech: silently swallow errors so a TTS hiccup never
+    blocks an observation. Logged so debugging is possible.
+    """
+    if ctx.speaker is None or not ctx.speaker.is_configured():
+        return
+    try:
+        ctx.speaker.speak(text, blocking=ctx.config.speech.blocking)
+    except SpeechError as e:
+        logger.warning("speech failed: %s", e)
+
+
+def say(text: str, *, ctx: ToolContext | None = None) -> bool:
+    """Speak text out loud through the configured TTS voice.
+
+    Use this to give the user a short audible confirmation while their
+    eye stays glued to the eyepiece. Keep spoken text shorter than written
+    text: 5 to 12 words is plenty. Do not read out coordinates, image paths,
+    or stack traces.
+
+    Args:
+        text: short utterance to synthesize and play.
+
+    Returns:
+        True if speech was attempted, False if speech is disabled or no
+        API key is configured.
+    """
+    c = _ctx(ctx)
+    if c.speaker is None or not c.speaker.is_configured():
+        return False
+    try:
+        c.speaker.speak(text, blocking=c.config.speech.blocking)
+        return True
+    except SpeechError as e:
+        logger.warning("speech failed: %s", e)
+        return False
 
 
 def get_target_coordinates(name: str, *, ctx: ToolContext | None = None) -> tuple[float, float]:
@@ -335,8 +381,10 @@ def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
         target_ra, target_dec = get_target_coordinates(target_name, ctx=c)
     except NameNotFoundError as e:
         logger.error("goto: %s", e)
+        _speak(c, f"I do not know {target_name}.")
         return False
     logger.info("goto: target %s at RA=%.4f Dec=%.4f", target_name, target_ra, target_dec)
+    _speak(c, f"Slewing to {target_name}.")
 
     # 2. Capture for solving the current pointing.
     try:
@@ -394,8 +442,10 @@ def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
         logger.info(
             "goto %s: arrived at RA=%.4f Dec=%.4f", target_name, achieved_ra, achieved_dec
         )
+        _speak(c, f"{target_name} acquired.")
     else:
         logger.warning("goto %s: slew did not finish in time", target_name)
+        _speak(c, f"{target_name} slew did not complete.")
     return success
 
 
@@ -410,4 +460,5 @@ TOOLS = (
     wait_for_slew_complete,
     get_observer_location,
     goto,
+    say,
 )

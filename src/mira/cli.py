@@ -152,6 +152,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_resolve.add_argument("target", help="object name")
 
+    p_say = sub.add_parser(
+        "say",
+        help="speak text via ElevenLabs TTS",
+        description=(
+            "Synthesize and play `text` through the configured ElevenLabs "
+            "voice. Useful for testing the voice and the API key. "
+            "ELEVENLABS_API_KEY must be set, either in the environment or "
+            "in ~/mira/.env."
+        ),
+    )
+    p_say.add_argument("text", nargs="+", help="text to speak (joined with spaces)")
+    p_say.add_argument(
+        "--voice",
+        type=str,
+        default=None,
+        help="override the voice ID from config",
+    )
+    p_say.add_argument(
+        "--blocking",
+        action="store_true",
+        help="wait for playback to finish before returning",
+    )
+
+    p_voices = sub.add_parser(
+        "voices",
+        help="list ElevenLabs voices on this account",
+        description=(
+            "Print every voice available to the configured ElevenLabs API "
+            "key, with descriptive labels. Use the resulting voice_id in "
+            "speech.voice_id in config.yaml."
+        ),
+    )
+
     p_preview = sub.add_parser(
         "preview",
         help="open a live preview window of the iPhone feed",
@@ -370,6 +403,45 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         ctx.shutdown()
 
 
+def cmd_say(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .speech import SpeechDisabled, SpeechError, Speaker
+
+    text = " ".join(args.text)
+    voice = args.voice or cfg.speech.voice_id
+    speaker = Speaker(voice_id=voice, model_id=cfg.speech.model_id)
+    try:
+        speaker.speak(text, blocking=args.blocking or cfg.speech.blocking)
+    except SpeechDisabled as e:
+        return _exit_with_clean_error(str(e))
+    except SpeechError as e:
+        return _exit_with_clean_error(str(e))
+    return EXIT_OK
+
+
+def cmd_voices(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .speech import SpeechDisabled, SpeechError, list_voices
+
+    try:
+        voices = list_voices()
+    except SpeechDisabled as e:
+        return _exit_with_clean_error(str(e))
+    except SpeechError as e:
+        return _exit_with_clean_error(str(e))
+    cur = cfg.speech.voice_id
+    for v in voices:
+        marker = "*" if v.voice_id == cur else " "
+        print(f"  [{marker}] {v.voice_id}  {v.name:24s}  {v.description}")
+    return EXIT_OK
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -399,6 +471,8 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "devices":  cmd_devices,
     "resolve":  cmd_resolve,
     "preview":  cmd_preview,
+    "say":      cmd_say,
+    "voices":   cmd_voices,
 }
 
 

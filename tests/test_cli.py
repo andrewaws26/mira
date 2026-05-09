@@ -156,7 +156,10 @@ class TestCleanErrors:
 
 class TestCommandsTable:
     def test_all_subcommands_have_handlers(self) -> None:
-        expected = {"goto", "sync", "where", "capture", "solve", "status", "devices", "resolve", "preview"}
+        expected = {
+            "goto", "sync", "where", "capture", "solve", "status",
+            "devices", "resolve", "preview", "say", "voices",
+        }
         assert set(COMMANDS.keys()) == expected
 
     def test_handlers_callable(self) -> None:

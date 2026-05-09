@@ -38,6 +38,7 @@ Other Celestron NexStar mounts that present the same hand-controller serial prot
 - ASTAP star database (H17 or H18). One-time download, several gigabytes.
 - imagesnap for camera capture. https://github.com/rharder/imagesnap
 - ffmpeg (provides ffplay) for the `mira preview` live window. https://ffmpeg.org
+- ElevenLabs API key (optional) for spoken output. https://elevenlabs.io. Free tier (10k chars/mo) is enough for several observing sessions.
 
 ## Installation
 
@@ -202,6 +203,15 @@ cp config.example.yaml ~/mira/config.yaml
 $EDITOR ~/mira/config.yaml
 ```
 
+If you want spoken output, also drop your ElevenLabs API key into `~/mira/.env`:
+
+```bash
+echo "ELEVENLABS_API_KEY=sk_your_key_here" > ~/mira/.env
+chmod 600 ~/mira/.env
+```
+
+`~/mira/.env` is gitignored. Then in `~/mira/config.yaml` set `speech.enabled: true`.
+
 Edit at minimum:
 
 - `observer.latitude` and `observer.longitude` for your location
@@ -309,6 +319,12 @@ mira where
 
 # Live preview window of the iPhone feed (use during alignment).
 mira preview
+
+# Speak text out loud through the configured TTS voice.
+mira say "Saturn is up tonight"
+
+# List available ElevenLabs voices.
+mira voices
 
 # Capture, solve, and sync (no slew).
 mira sync

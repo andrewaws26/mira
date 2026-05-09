@@ -46,3 +46,12 @@ storage:
 
 logging:
   level: INFO              # DEBUG, INFO, WARNING, ERROR
+
+# Spoken output via ElevenLabs TTS. The API key is read from the
+# ELEVENLABS_API_KEY env var or ~/mira/.env, never from this file.
+# Find more voice IDs with: mira voices
+speech:
+  enabled: false
+  voice_id: EXAVITQu4vr4xnSDxMaL  # Sarah: mature, reassuring, confident
+  model_id: eleven_multilingual_v2
+  blocking: false          # true makes the CLI wait for playback to finish
