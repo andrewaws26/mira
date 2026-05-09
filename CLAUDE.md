@@ -22,7 +22,8 @@ If you change the persona, keep it short and keep the cadence calm; the user is 
 - INDI's Celestron driver is `indi_celestron_gps` (binary name) and advertises device `"Celestron GPS"`. Despite the name it covers all current NexStar mounts including the non-GPS 130SLT. `mount.CelestronMount` defaults to `device="Celestron GPS"`. The earlier name `indi_celestron_nexstar_telescope` is gone in INDI 2.x.
 - Building INDI from source on macOS: pass `-DCMAKE_INSTALL_RPATH=/opt/homebrew/lib -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON` to cmake, otherwise installed binaries fail at runtime with `Library not loaded ... no LC_RPATH's found`. GSL is a required brew dep; cmake fails without it.
 - Continuity Camera shows up under the iPhone's user-set name (e.g. "Andrew Camera"), NOT the literal string "iPhone". `imagesnap` on this build prints `Video Devices:` as the header (with colon, no "found"). `camera.list_devices` filters on `lower("video device")` prefix to handle both variants and strips `=> ` and `* ` line prefixes.
-- Spoken output goes through `src/mira/speech.py`, which calls ElevenLabs over HTTPS and pipes the MP3 to macOS `afplay`. The API key is read from `os.environ["ELEVENLABS_API_KEY"]` first, then `~/mira/.env`. Never put the key in `config.yaml`. Default voice is Sarah (EXAVITQu4vr4xnSDxMaL); change `speech.voice_id` in config or use `mira voices` to browse.
+- Spoken output goes through `src/mira/speech.py`. Hot path: stream PCM 22.05kHz mono from `/v1/text-to-speech/{voice_id}/stream` straight into `ffplay` stdin (lower latency than MP3 + afplay). Falls back to MP3 + afplay when ffplay is missing. The API key is read from `os.environ["ELEVENLABS_API_KEY"]` first, then `~/mira/.env`. Never put the key in `config.yaml`. The example config defaults to Sarah (EXAVITQu4vr4xnSDxMaL), free-tier accessible; the local `~/mira/config.yaml` is configured for Vega (`pTX8uGyVgHCWLj6IkcbC`, Spanish-accented narrator) which requires the Starter plan. `mira voices` to browse.
+- Default model is `eleven_v3` (most expressive; supports inline audio tags `[excited]`, `[curious]`, `[warmly]`, `[softly]`). Auto-fallback to `eleven_turbo_v2_5` on HTTP error. Watch out: v3 rejects `optimize_streaming_latency` with HTTP 400 "unsupported_model"; that param is conditionally attached only for v2-family models.
 - The `say` tool in `tools.py` is best-effort: speech failures (network, quota, rate-limit) are logged but never raise, so a TTS hiccup cannot block an observation.
 - `mira preview` shells out to `ffplay` from ffmpeg. ffmpeg is an optional dep, only needed for that one subcommand. Device name resolution is a case-insensitive substring match against `ffmpeg -f avfoundation -list_devices true` output, indexed by AVFoundation index, not name (ffplay's `-i` argument).
 - ASTAP `d05`, `d20`, `d50`, `d80` star DBs install to `/usr/local/opt/astap/`, not the obvious places. The `verify_setup.py` candidate list includes that path. Old ASTAP docs reference H17/H18; those are gone.
@@ -32,7 +33,7 @@ If you change the persona, keep it short and keep the cadence calm; the user is 
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/                  # full suite, must stay green (currently 126 tests)
+python -m pytest tests/                  # full suite, must stay green (currently 152 tests)
 python -m pytest tests/test_solver.py    # single file
 python -m pytest -k "goto"               # by name pattern
 ```
