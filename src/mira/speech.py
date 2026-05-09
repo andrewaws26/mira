@@ -34,19 +34,21 @@ logger = logging.getLogger(__name__)
 
 ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
 DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Sarah: mature, reassuring, confident
-DEFAULT_MODEL_ID = "eleven_multilingual_v2"
+# Eleven v3 is the most expressive model and supports inline audio tags like
+# [excited], [curious], [warmly], [whispers]. Costs more credits per character
+# than v2, but Mira's utterances are short.
+DEFAULT_MODEL_ID = "eleven_v3"
 DEFAULT_ENV_FILE = Path("~/mira/.env").expanduser()
 
-# Voice settings tuned for a calm-but-not-flat observing companion.
+# Voice settings tuned for an excited-teacher delivery: warm, inflected,
+# leans into the audio tags and exclamation marks the persona uses.
 #   stability       lower = more inflection, higher = more even/monotone
 #   style           higher = more emotional exaggeration
 #   similarity_boost  how closely to match the source voice character
-# These defaults give Vega room to inflect on discourse markers ("Mira,"
-# "ahi", "listo") without going theatrical.
 DEFAULT_VOICE_SETTINGS = {
-    "stability": 0.30,
+    "stability": 0.45,
     "similarity_boost": 0.75,
-    "style": 0.55,
+    "style": 0.70,
     "use_speaker_boost": True,
 }
 

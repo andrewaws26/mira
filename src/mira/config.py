@@ -105,14 +105,15 @@ class SpeechConfig:
 
     enabled: bool = False
     voice_id: str = "EXAVITQu4vr4xnSDxMaL"  # Sarah
-    model_id: str = "eleven_multilingual_v2"
+    model_id: str = "eleven_v3"
     blocking: bool = False  # if True, the CLI waits for playback to finish
     # Voice settings: lower stability = more inflection; higher style = more
-    # emotional exaggeration. Defaults give Vega room to inflect on
-    # "mira"/"ahi"/"listo" without going theatrical.
-    stability: float = 0.30
+    # emotional exaggeration. Defaults are tuned for an excited-teacher
+    # delivery that leans into audio tags ([excited], [warmly]) and
+    # exclamation marks in the spoken text.
+    stability: float = 0.45
     similarity_boost: float = 0.75
-    style: float = 0.55
+    style: float = 0.70
     use_speaker_boost: bool = True
 
 
@@ -240,11 +241,11 @@ def _from_dict(raw: dict) -> Config:
     speech = SpeechConfig(
         enabled=bool(sp_raw.get("enabled", False)),
         voice_id=str(sp_raw.get("voice_id", "EXAVITQu4vr4xnSDxMaL")),
-        model_id=str(sp_raw.get("model_id", "eleven_multilingual_v2")),
+        model_id=str(sp_raw.get("model_id", "eleven_v3")),
         blocking=bool(sp_raw.get("blocking", False)),
-        stability=float(sp_raw.get("stability", 0.30)),
+        stability=float(sp_raw.get("stability", 0.45)),
         similarity_boost=float(sp_raw.get("similarity_boost", 0.75)),
-        style=float(sp_raw.get("style", 0.55)),
+        style=float(sp_raw.get("style", 0.70)),
         use_speaker_boost=bool(sp_raw.get("use_speaker_boost", True)),
     )
 
