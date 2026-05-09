@@ -352,12 +352,17 @@ def build_server() -> FastMCP:
     @mcp.tool(
         name="say",
         description=(
-            "Speak a short utterance out loud to the user through the "
-            "configured ElevenLabs voice. Use this when the user is at the "
-            "eyepiece and you want to hand them a confirmation, a target "
-            "name, or a brief observation hint without forcing them to look "
-            "at the screen. Keep spoken text under 12 words. Do not read "
-            "out coordinates, paths, or error tracebacks. Returns true if "
+            "Speak an utterance out loud to the user through the configured "
+            "ElevenLabs voice. Use this when the user is at the eyepiece and "
+            "you want to hand them a confirmation, a target name, an "
+            "observation hint, or a short narration without forcing them to "
+            "look at the screen. Aim for 2 to 3 sentences per call (roughly "
+            "20 to 50 words); the eleven_v3 TTS destabilizes on one-word "
+            "outputs and produces warbled phonemes. For a multi-fact "
+            "narration, send the FULL passage as one call rather than "
+            "chunking it into many short calls; chunking creates audible "
+            "gaps and synthesis-startup latency stacks. Do not read out "
+            "coordinates, paths, or error tracebacks. Returns true if "
             "speech was attempted, false if disabled."
         ),
     )

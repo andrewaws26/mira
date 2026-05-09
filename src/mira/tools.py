@@ -174,13 +174,18 @@ def _speak(ctx: ToolContext, text: str) -> None:
 def say(text: str, *, ctx: ToolContext | None = None) -> bool:
     """Speak text out loud through the configured TTS voice.
 
-    Use this to give the user a short audible confirmation while their
-    eye stays glued to the eyepiece. Keep spoken text shorter than written
-    text: 5 to 12 words is plenty. Do not read out coordinates, image paths,
-    or stack traces.
+    Use this to give the user audible confirmations, target names,
+    orientation hints, or short narrations while their eye stays at the
+    eyepiece. Aim for 2 to 3 sentences per call (roughly 20 to 50 words);
+    the eleven_v3 TTS destabilizes on one-word outputs and produces
+    warbled phonemes. For a multi-fact narration, send the full passage
+    in a single call rather than chunking; back-to-back small calls
+    leave audible gaps because each new playback waits for the prior
+    subprocess to drain. Do not read out coordinates, image paths, or
+    stack traces.
 
     Args:
-        text: short utterance to synthesize and play.
+        text: utterance to synthesize and play.
 
     Returns:
         True if speech was attempted, False if speech is disabled or no
