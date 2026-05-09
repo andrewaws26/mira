@@ -55,32 +55,82 @@ Verify:
 ls README.md pyproject.toml src/mira
 ```
 
-### 2. Install Homebrew dependencies
+### 2. Install imagesnap (Homebrew)
 
 ```bash
-brew install indi
-brew install --cask astap
 brew install imagesnap
 ```
+
+imagesnap is the only one of Mira's three external tools that is in Homebrew core. ASTAP and INDI need direct downloads or a source build, see steps 2a and 2b.
 
 Verify:
 
 ```bash
-indiserver --help | head -3
-astap --version
 imagesnap -l
 ```
 
-`imagesnap -l` lists video devices. If the iPhone is paired and Continuity Camera is enabled, you should see "iPhone" in the list.
+This lists video devices. If the iPhone is paired and Continuity Camera is enabled, you will see "iPhone" in the list.
+
+### 2a. Install ASTAP
+
+ASTAP is not in Homebrew. Download the macOS installer from SourceForge and run it:
+
+```bash
+curl -L -o /tmp/astap.pkg "https://sourceforge.net/projects/astap-program/files/macOS%20installer/astap.pkg/download"
+sudo installer -pkg /tmp/astap.pkg -target /
+```
+
+The installer puts ASTAP at `/Applications/ASTAP.app`, which exposes the CLI at `/Applications/ASTAP.app/Contents/MacOS/astap`. The default `~/mira/config.yaml` already points at that path.
+
+Verify:
+
+```bash
+/Applications/ASTAP.app/Contents/MacOS/astap -h | head -5
+```
+
+### 2b. Install INDI (build from source)
+
+INDI is not in Homebrew core and the upstream repo does not publish macOS binaries, so we build from source. This takes about 20 minutes on Apple Silicon.
+
+```bash
+brew install cmake libnova zlib gphoto2 libusb cfitsio fftw curl theora libev pkg-config
+git clone --depth 1 https://github.com/indilib/indi.git ~/src/indi
+mkdir -p ~/src/indi/build && cd ~/src/indi/build
+cmake -DCMAKE_INSTALL_PREFIX=/opt/homebrew \
+      -DINDI_BUILD_SERVER=ON \
+      -DINDI_BUILD_DRIVERS=ON \
+      ..
+make -j$(sysctl -n hw.ncpu)
+sudo make install
+```
+
+INDI's Celestron NexStar driver lives at `/opt/homebrew/bin/indi_celestron_nexstar_telescope` after install.
+
+Verify:
+
+```bash
+indiserver -h
+which indi_celestron_nexstar_telescope
+```
+
+If you would rather not build INDI yourself, the alternative is INDIGO Server (https://www.indigo-astronomy.org). INDIGO ships a macOS .pkg but uses a different wire protocol; Mira's `mount.py` would need to swap from INDI XML to INDIGO. Stick with INDI for now.
 
 ### 3. Download the ASTAP star database
 
-Open the ASTAP application once. Use Tools, then Download Star Database, and pick H17 or H18. H18 is larger but solves dimmer fields. The download is a few gigabytes and goes to ASTAP's standard data directory.
-
-Verify by re-opening ASTAP. The database name should appear in the title bar after the next solve attempt, or you can run:
+ASTAP's solver needs a star catalog on disk. Recent ASTAP uses `d05`, `d20`, `d50`, and `d80` databases (covering progressively dimmer stars). For the iPhone afocal pipeline at ~0.5 degree FOV, `d20` (434 MB compressed) is the right balance. `d50` (936 MB) is overkill but fine if you have the disk. `d05` (137 MB) is too sparse for reliable solves at this FOV.
 
 ```bash
-ls ~/Library/Application\ Support/astap/ /Applications/ASTAP.app/Contents/MacOS 2>/dev/null
+curl -L -o /tmp/d20.pkg "https://sourceforge.net/projects/astap-program/files/star_databases/d20_star_database.pkg/download"
+sudo installer -pkg /tmp/d20.pkg -target /
+```
+
+The default `~/mira/config.yaml` is set to `star_db: d50`. If you installed `d20` instead, change `solver.star_db` to `d20`.
+
+Verify by listing the ASTAP application support directory:
+
+```bash
+ls ~/Library/Application\ Support/astap/ 2>/dev/null
+ls /Applications/ASTAP.app/Contents/MacOS 2>/dev/null
 ```
 
 ### 4. Set up a Python virtual environment
@@ -353,7 +403,7 @@ Start it explicitly in a terminal:
 indiserver -v indi_celestron_nexstar_telescope
 ```
 
-If you get "command not found", install via `brew install indi`. If the driver itself is missing, `brew install indi-3rdparty` may carry the Celestron driver in some Homebrew taps.
+If you get "command not found", finish step 2b (build INDI from source). The Celestron NexStar driver is part of `INDI_BUILD_DRIVERS=ON` in that build.
 
 ### Plate solves succeed but slew lands far from the target
 

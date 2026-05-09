@@ -53,12 +53,17 @@ def list_devices() -> list[str]:
     devices: list[str] = []
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
-        if not line or line.lower().startswith("video devices found"):
+        if not line:
             continue
-        # Lines often start with "=> " or similar prefix from newer imagesnap
-        # versions; strip it.
+        # imagesnap variants: "Video devices found:", "Video Devices:", etc.
+        # The header line ends with a colon and starts with "video device".
+        if line.lower().startswith("video device"):
+            continue
+        # Per-device lines often start with "=> " or "* " on newer versions.
         if line.startswith("=> "):
             line = line[3:].strip()
+        elif line.startswith("* "):
+            line = line[2:].strip()
         devices.append(line)
     return devices
 

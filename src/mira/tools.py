@@ -60,6 +60,9 @@ class ToolContext:
             capture_dir=cfg.camera.capture_dir,
             warmup_seconds=cfg.camera.warmup_seconds,
         )
+        # Solver does not validate the ASTAP binary at construction time, so
+        # subcommands that do not need plate solving (resolve, where, status)
+        # still work even when ASTAP is not yet installed.
         solver = Solver(
             astap_path=cfg.solver.astap_path,
             estimated_fov_deg=cfg.solver.estimated_fov_deg,

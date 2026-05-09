@@ -56,7 +56,8 @@ def _resolve_binary(astap_path: Path | str) -> Path:
         return Path(found)
     raise SolverNotFoundError(
         f"ASTAP not found at {astap_path}. "
-        "Install with: brew install --cask astap, or download from https://www.hnsky.org/astap.htm"
+        "Download the macOS .pkg from https://www.hnsky.org/astap.htm "
+        "and `sudo installer -pkg astap.pkg -target /`."
     )
 
 
@@ -149,19 +150,31 @@ def parse_solve_result(text: str, image_path: Path | None = None, wcs_path: Path
 
 
 class Solver:
-    """Wrapper around the ASTAP CLI."""
+    """Wrapper around the ASTAP CLI.
+
+    The ASTAP binary is not validated at construction time so that the
+    rest of Mira continues to work when ASTAP is not yet installed. The
+    binary is resolved on first call to `solve`, which raises
+    SolverNotFoundError if it cannot be found.
+    """
 
     def __init__(
         self,
         astap_path: Path | str = "/usr/local/bin/astap",
         estimated_fov_deg: float = 0.5,
         timeout_seconds: int = 60,
-        star_db: str = "H18",
+        star_db: str = "d50",
     ) -> None:
-        self.astap_path = _resolve_binary(astap_path)
+        self.astap_path = Path(astap_path).expanduser()
         self.estimated_fov_deg = estimated_fov_deg
         self.timeout_seconds = timeout_seconds
         self.star_db = star_db
+        self._resolved_binary: Optional[Path] = None
+
+    def _binary(self) -> Path:
+        if self._resolved_binary is None:
+            self._resolved_binary = _resolve_binary(self.astap_path)
+        return self._resolved_binary
 
     def solve(
         self,
@@ -186,8 +199,9 @@ class Solver:
         if not img.exists():
             raise SolverError(f"image file not found: {img}")
 
+        binary = self._binary()
         fov = fov_deg if fov_deg is not None else self.estimated_fov_deg
-        cmd: list[str] = [str(self.astap_path), "-f", str(img), "-wcs", "-fov", f"{fov:.4f}"]
+        cmd: list[str] = [str(binary), "-f", str(img), "-wcs", "-fov", f"{fov:.4f}"]
         if ra_hint_deg is not None and dec_hint_deg is not None:
             ra_hours = ra_hint_deg / 15.0
             spd = dec_hint_deg + 90.0
@@ -206,7 +220,7 @@ class Solver:
                 f"ASTAP timed out after {self.timeout_seconds}s on {img.name}"
             ) from e
         except FileNotFoundError as e:
-            raise SolverNotFoundError(f"ASTAP binary not executable: {self.astap_path}") from e
+            raise SolverNotFoundError(f"ASTAP binary not executable: {binary}") from e
 
         wcs_path = img.with_suffix(".wcs")
         ini_path = img.with_suffix(".ini")

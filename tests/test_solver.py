@@ -85,11 +85,27 @@ class TestParseSolveResult:
 
 
 class TestSolverConstruction:
-    def test_missing_binary_raises(self, tmp_path: Path) -> None:
+    def test_construction_does_not_validate_binary(self, tmp_path: Path) -> None:
+        """Constructing a Solver with a missing binary must NOT raise.
+
+        Validation happens on first solve(). This lets ToolContext build
+        on machines where ASTAP is not yet installed, so commands that
+        do not need the solver (resolve, where, status) keep working.
+        """
         from mira.solver import Solver
 
+        # Should not raise.
+        Solver(astap_path=tmp_path / "nope-astap")
+
+    def test_missing_binary_raises_on_solve(self, tmp_path: Path) -> None:
+        from mira.solver import Solver
+
+        # Need a real image so we get past the image-exists check first.
+        img = tmp_path / "img.jpg"
+        img.write_bytes(b"\xff\xd8\xff")  # not a real JPEG but file exists
+        s = Solver(astap_path=tmp_path / "nope-astap")
         with pytest.raises(SolverNotFoundError):
-            Solver(astap_path=tmp_path / "nope-astap")
+            s.solve(img)
 
     def test_solve_missing_image(self, tmp_path: Path) -> None:
         from mira.solver import Solver

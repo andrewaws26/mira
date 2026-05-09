@@ -131,7 +131,11 @@ def check_astap(astap_path: Path) -> CheckResult:
         name="ASTAP binary",
         passed=False,
         detail=f"not at {p}",
-        fix="brew install --cask astap, then update solver.astap_path in config.yaml",
+        fix=(
+            "Download from https://www.hnsky.org/astap.htm (macOS .pkg under "
+            "'macOS installer'), then `sudo installer -pkg astap.pkg -target /`. "
+            "Update solver.astap_path in config.yaml if your install path differs."
+        ),
     )
 
 
@@ -170,9 +174,9 @@ def check_astap_star_db(astap_path: Path, db_name: str) -> CheckResult:
         passed=False,
         detail="not found in common locations",
         fix=(
-            "Download the H17 or H18 database from https://www.hnsky.org/astap.htm "
-            "and place it next to the ASTAP binary or in ~/Library/Application "
-            "Support/astap/"
+            "Download d20_star_database.pkg (or d50, d80) from "
+            "https://sourceforge.net/projects/astap-program/files/star_databases/ "
+            "and `sudo installer -pkg <pkg> -target /`."
         ),
         warning=True,
     )
