@@ -152,6 +152,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_resolve.add_argument("target", help="object name")
 
+    p_preview = sub.add_parser(
+        "preview",
+        help="open a live preview window of the iPhone feed",
+        description=(
+            "Launch ffplay against the configured Continuity Camera. "
+            "Use during initial alignment to center the iPhone over the "
+            "eyepiece by adjusting the NexYZ while watching the live feed. "
+            "Press Q in the preview window to close. Requires ffmpeg "
+            "(brew install ffmpeg)."
+        ),
+    )
+    p_preview.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="override camera.device_name from config",
+    )
+    p_preview.add_argument(
+        "--framerate",
+        type=int,
+        default=30,
+        help="target frames per second (default: 30)",
+    )
+    p_preview.add_argument(
+        "--size",
+        type=str,
+        default=None,
+        help="window size as WIDTHxHEIGHT (e.g. 1280x720)",
+    )
+
     # Make sure type checkers know these locals stay used.
     _ = (p_goto, p_sync, p_where, p_capture, p_solve, p_status, p_devices, p_resolve)
 
@@ -340,6 +370,25 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         ctx.shutdown()
 
 
+def cmd_preview(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .preview import PreviewError, launch_preview
+
+    device = args.device or cfg.camera.device_name
+    try:
+        rc = launch_preview(
+            device_name=device,
+            framerate=args.framerate,
+            window_size=args.size,
+        )
+    except PreviewError as e:
+        return _exit_with_clean_error(str(e))
+    return rc
+
+
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "goto":     cmd_goto,
     "sync":     cmd_sync,
@@ -349,6 +398,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "status":   cmd_status,
     "devices":  cmd_devices,
     "resolve":  cmd_resolve,
+    "preview":  cmd_preview,
 }
 
 

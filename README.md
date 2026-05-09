@@ -37,6 +37,7 @@ Other Celestron NexStar mounts that present the same hand-controller serial prot
 - ASTAP for plate solving. https://www.hnsky.org/astap.htm
 - ASTAP star database (H17 or H18). One-time download, several gigabytes.
 - imagesnap for camera capture. https://github.com/rharder/imagesnap
+- ffmpeg (provides ffplay) for the `mira preview` live window. https://ffmpeg.org
 
 ## Installation
 
@@ -58,10 +59,10 @@ ls README.md pyproject.toml src/mira
 ### 2. Install imagesnap (Homebrew)
 
 ```bash
-brew install imagesnap
+brew install imagesnap ffmpeg
 ```
 
-imagesnap is the only one of Mira's three external tools that is in Homebrew core. ASTAP and INDI need direct downloads or a source build, see steps 2a and 2b.
+imagesnap and ffmpeg are the only Mira-related tools in Homebrew core. ASTAP and INDI need direct downloads or a source build, see steps 2a and 2b. ffmpeg is required for `mira preview`; the rest of Mira works without it.
 
 Verify:
 
@@ -283,7 +284,7 @@ Run through this every observing session:
 1. Power on the mount. Battery or AC; the SLT brain needs ~12V.
 2. Use the hand controller to do a deliberately bad alignment. "Solar System Align" pointed at any bright object will do. The 130SLT refuses Goto/sync commands until it thinks it has been aligned, so this fake alignment is just to flip that flag. Mira's first sync will overwrite whatever data this step recorded.
 3. Connect the FTDI cable to the hand controller and the Mac.
-4. Mount the iPhone in the NexYZ DX. Center a bright star in the eyepiece, focus the eyepiece, then center the iPhone camera over the eyepiece via the NexYZ adjusters until the same star is centered in the iPhone's camera preview.
+4. Mount the iPhone in the NexYZ DX. Center a bright star in the eyepiece, focus the eyepiece, then center the iPhone camera over the eyepiece via the NexYZ adjusters until the same star is centered in the iPhone's camera preview. Tip: run `mira preview` in another terminal during this step. It opens a live ffplay window of the iPhone feed so you can iterate on the NexYZ knobs while watching, instead of capturing-and-inspecting in a loop.
 5. Start the INDI server in its own terminal: `indiserver -v indi_celestron_gps`.
 6. In another terminal, activate the venv: `source .venv/bin/activate`.
 7. Confirm the camera and mount are alive: `python scripts/test_camera.py && python scripts/test_mount_connect.py`.
@@ -305,6 +306,9 @@ mira solve /tmp/test.jpg
 
 # Read the mount's current position.
 mira where
+
+# Live preview window of the iPhone feed (use during alignment).
+mira preview
 
 # Capture, solve, and sync (no slew).
 mira sync
