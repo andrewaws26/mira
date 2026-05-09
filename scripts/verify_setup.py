@@ -211,7 +211,7 @@ def check_indi_server(host: str, port: int) -> CheckResult:
             name=f"INDI server at {host}:{port}",
             passed=False,
             detail="not reachable",
-            fix="In another terminal: indiserver -v indi_celestron_nexstar_telescope",
+            fix="In another terminal: indiserver -v indi_celestron_gps",
         )
     return CheckResult(name=f"INDI server at {host}:{port}", passed=True, detail="reachable")
 

@@ -70,7 +70,7 @@ class IndiProperty:
 class IndiClient:
     """Minimal INDI XML client. Connects to indiserver over TCP."""
 
-    def __init__(self, host: str = "localhost", port: int = 7624, device: str = "Celestron NexStar") -> None:
+    def __init__(self, host: str = "localhost", port: int = 7624, device: str = "Celestron GPS") -> None:
         self.host = host
         self.port = port
         self.device = device
@@ -91,7 +91,7 @@ class IndiClient:
         except (ConnectionRefusedError, socket.gaierror, OSError) as e:
             raise MountError(
                 f"could not reach INDI server at {self.host}:{self.port}: {e}. "
-                "Start it with: indiserver -v indi_celestron_nexstar_telescope"
+                "Start it with: indiserver -v indi_celestron_gps"
             ) from e
         self._sock.settimeout(None)
         self._stop.clear()
@@ -292,7 +292,7 @@ class CelestronMount:
         self,
         host: str = "localhost",
         port: int = 7624,
-        device: str = "Celestron NexStar",
+        device: str = "Celestron GPS",
     ) -> None:
         self._client = IndiClient(host=host, port=port, device=device)
         self.host = host

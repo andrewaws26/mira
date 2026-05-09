@@ -104,13 +104,13 @@ make -j$(sysctl -n hw.ncpu)
 sudo make install
 ```
 
-INDI's Celestron NexStar driver lives at `/opt/homebrew/bin/indi_celestron_nexstar_telescope` after install.
+INDI's Celestron NexStar driver lives at `/opt/homebrew/bin/indi_celestron_gps` after install.
 
 Verify:
 
 ```bash
 indiserver -h
-which indi_celestron_nexstar_telescope
+which indi_celestron_gps
 ```
 
 If you would rather not build INDI yourself, the alternative is INDIGO Server (https://www.indigo-astronomy.org). INDIGO ships a macOS .pkg but uses a different wire protocol; Mira's `mount.py` would need to swap from INDI XML to INDIGO. Stick with INDI for now.
@@ -210,7 +210,7 @@ This will show observer info and a "mount: NOT connected" line. That is correct;
 In a dedicated terminal window, start the INDI server with the Celestron driver:
 
 ```bash
-indiserver -v indi_celestron_nexstar_telescope
+indiserver -v indi_celestron_gps
 ```
 
 Leave this running for the entire observing session. Open a second terminal for everything else.
@@ -229,7 +229,7 @@ Done in step 6 above. Tested with `imagesnap -l`.
 
 ### Configure INDI
 
-The INDI driver is `indi_celestron_nexstar_telescope`. The mount appears as device "Celestron NexStar". Mira's config defaults to that name. If your INDI build uses a different driver name, run `indiserver -v <other_driver>` and adjust accordingly. The protocol is identical.
+The INDI driver is `indi_celestron_gps`. Despite the name, this driver covers all current Celestron NexStar mounts including the non-GPS 130SLT. The mount appears on the INDI bus as device "Celestron GPS". Mira's `mount.py` defaults to that device name. If your INDI build uses a different driver name, run `indiserver -v <other_driver>` and adjust accordingly. The protocol is identical.
 
 ### Find the right serial port
 
@@ -274,7 +274,7 @@ Run through this every observing session:
 2. Use the hand controller to do a deliberately bad alignment. "Solar System Align" pointed at any bright object will do. The 130SLT refuses Goto/sync commands until it thinks it has been aligned, so this fake alignment is just to flip that flag. Mira's first sync will overwrite whatever data this step recorded.
 3. Connect the FTDI cable to the hand controller and the Mac.
 4. Mount the iPhone in the NexYZ DX. Center a bright star in the eyepiece, focus the eyepiece, then center the iPhone camera over the eyepiece via the NexYZ adjusters until the same star is centered in the iPhone's camera preview.
-5. Start the INDI server in its own terminal: `indiserver -v indi_celestron_nexstar_telescope`.
+5. Start the INDI server in its own terminal: `indiserver -v indi_celestron_gps`.
 6. In another terminal, activate the venv: `source .venv/bin/activate`.
 7. Confirm the camera and mount are alive: `python scripts/test_camera.py && python scripts/test_mount_connect.py`.
 8. You are ready to observe. Use the CLI or talk to Claude Code.
@@ -400,7 +400,7 @@ The 130SLT firmware refuses sync, slew, or goto until it believes it has been al
 Start it explicitly in a terminal:
 
 ```bash
-indiserver -v indi_celestron_nexstar_telescope
+indiserver -v indi_celestron_gps
 ```
 
 If you get "command not found", finish step 2b (build INDI from source). The Celestron NexStar driver is part of `INDI_BUILD_DRIVERS=ON` in that build.

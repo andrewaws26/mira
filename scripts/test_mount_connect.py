@@ -2,7 +2,7 @@
 """Smoke test: connect to the INDI mount, query position, disconnect.
 
 Does not move the mount. Run after starting indiserver:
-    indiserver -v indi_celestron_nexstar_telescope
+    indiserver -v indi_celestron_gps
 
 PASS criteria: connection opens, EQUATORIAL_EOD_COORD is readable, clean disconnect.
 """
@@ -33,7 +33,7 @@ def main() -> int:
     mount = CelestronMount(
         host=cfg.mount.indi_host,
         port=cfg.mount.indi_port,
-        device="Celestron NexStar",
+        device="Celestron GPS",
     )
     try:
         mount.connect(timeout=10.0)
