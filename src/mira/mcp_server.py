@@ -247,8 +247,14 @@ def build_server() -> FastMCP:
         name="slew_to",
         description=(
             "Command the mount to slew to the given apparent RA/Dec. Blocks "
-            "until the slew completes or times out. Sync the mount first if "
-            "you want the slew to land accurately on the target."
+            "until the slew completes or times out (default 180s). Sync the "
+            "mount first if you want the slew to land accurately on the "
+            "target. Returns true only if the mount arrived within "
+            "tolerance; false covers four distinct failure modes (firmware "
+            "refusal, timeout while still slewing, partial landing, abort) "
+            "which are distinguished in the mira.log warnings. If you get "
+            "false, read the latest WARNING line in mira.log to tell "
+            "'mount continues in background' from 'firmware refused'."
         ),
     )
     def slew_to(ra_deg: float, dec_deg: float) -> bool:

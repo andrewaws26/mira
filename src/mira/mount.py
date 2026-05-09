@@ -18,6 +18,7 @@ then `get_position()`, `slew_to()`, `sync()`, `wait_slew_complete()`.
 
 from __future__ import annotations
 
+import enum
 import logging
 import socket
 import threading
@@ -40,6 +41,38 @@ class MountNotConnected(MountError):
 
 class MountTimeoutError(MountError):
     pass
+
+
+class SlewOutcome(enum.Enum):
+    """Why a slew_to call ended. Distinguishes "still moving when we gave
+    up" from "firmware silently refused the command" from "landed off
+    target" so callers and logs do not collapse three different failure
+    modes into a single False.
+    """
+
+    ARRIVED = "arrived"  # mount reached target within tolerance
+    NOOP = "noop"  # requested distance was sub-arcminute and we did not move
+    REFUSED = "refused"  # mount accepted command but moved < 50% of requested
+    PARTIAL = "partial"  # moved most of the way but landed > tolerance off
+    TIMED_OUT = "timed_out"  # wait_slew_complete timed out (still slewing in firmware)
+    ABORTED = "aborted"  # abort() was called between Busy and Ok
+
+    @property
+    def succeeded(self) -> bool:
+        return self in (SlewOutcome.ARRIVED, SlewOutcome.NOOP)
+
+
+class WaitOutcome(enum.Enum):
+    """Result of wait_slew_complete. SETTLED means Busy -> Ok seen.
+    NOT_STARTED means we never observed Busy (likely a noop). TIMED_OUT
+    means Busy was seen but Ok never arrived within the timeout, i.e.
+    the mount is still slewing when we returned.
+    """
+
+    SETTLED = "settled"
+    NOT_STARTED = "not_started"
+    TIMED_OUT = "timed_out"
+    ABORTED = "aborted"
 
 
 # INDI property states.
@@ -459,71 +492,127 @@ class CelestronMount:
         return prop.state == STATE_BUSY
 
     SLEW_ARRIVAL_TOLERANCE_DEG = 1.0
+    # 180s default covers worst-case alt-az slews on a 130SLT with bad
+    # alignment, which can take 60s+ when the firmware translates the
+    # target RA/Dec into a long motor-axis travel. Older 60s default
+    # surfaced these as "timed out" while the mount kept slewing in
+    # the background; callers had no way to tell that apart from a
+    # firmware refusal.
+    SLEW_DEFAULT_TIMEOUT_S = 180.0
 
-    def slew_to(self, ra_deg: float, dec_deg: float, timeout: float = 60.0) -> bool:
-        """Slew to apparent RA/Dec. Returns True only if the mount actually
-        arrived at the target.
+    def slew_to(
+        self, ra_deg: float, dec_deg: float, timeout: Optional[float] = None
+    ) -> bool:
+        """Slew to apparent RA/Dec. Returns True only if the mount arrived
+        at the target (within SLEW_ARRIVAL_TOLERANCE_DEG).
 
-        Returns False if:
-          - the slew was aborted via abort()
-          - wait_slew_complete timed out
-          - the mount moved less than 50 percent of the requested distance
-            (catches silent firmware refusals: mount accepts the command
-            but refuses to drive the motors, common when the target is
-            below the horizon, near the meridian danger zone, or when the
-            alignment is fake). The 50 percent rule scales naturally with
-            slew size, unlike a fixed-degrees tolerance.
-
-        On a no-op slew (target very close to current pointing), both the
-        requested distance and moved distance are tiny and we pass.
+        Thin wrapper over `slew_to_with_outcome`. Returns False for any
+        non-arrival outcome (refused, timed out, partial, aborted) so the
+        existing bool-based callers stay compatible. Use
+        `slew_to_with_outcome` if you need to distinguish the failure
+        modes (e.g., retry on TIMED_OUT but bail on REFUSED).
         """
+        outcome = self.slew_to_with_outcome(ra_deg, dec_deg, timeout=timeout)
+        return outcome.succeeded
+
+    def slew_to_with_outcome(
+        self, ra_deg: float, dec_deg: float, timeout: Optional[float] = None
+    ) -> SlewOutcome:
+        """Slew to apparent RA/Dec and return a categorized outcome.
+
+        Outcomes:
+          ARRIVED   mount landed within SLEW_ARRIVAL_TOLERANCE_DEG of target.
+          NOOP      requested distance was sub-arcminute; nothing to do.
+          REFUSED   mount moved < 50 percent of requested distance. Common
+                    cause: firmware horizon / cable-wrap / slew-limit
+                    refusal, or alignment so far off that the target maps
+                    to a no-go zone in the mount's internal model.
+          PARTIAL   mount moved most of the way but landed > tolerance off.
+                    Tracking drift, late-stage refusal, or simply bad
+                    alignment leaving the model offset.
+          TIMED_OUT EQUATORIAL_EOD_COORD did not return to Ok within the
+                    timeout. The mount is likely still slewing when this
+                    returns. Caller should poll `wait_slew_complete` or
+                    bump the timeout.
+          ABORTED   abort() was called between Busy and Ok.
+        """
+        if timeout is None:
+            timeout = self.SLEW_DEFAULT_TIMEOUT_S
         self._abort_pending = False
-        # Capture the starting position so we can compare moved-vs-requested.
         try:
             ra_start, dec_start = self.get_position(timeout=3.0)
         except MountError:
-            ra_start = ra_deg  # if we can't read, skip the move check
+            ra_start = ra_deg
             dec_start = dec_deg
         requested_dist = _angular_separation(ra_start, dec_start, ra_deg, dec_deg)
 
         self._set_coord_mode("TRACK")
         self._send_target(ra_deg, dec_deg)
-        if not self.wait_slew_complete(timeout=timeout):
-            return False
+        wait_outcome = self._wait_slew_complete_outcome(timeout=timeout)
+
+        if wait_outcome is WaitOutcome.ABORTED:
+            logger.warning(
+                "slew_to(%g, %g) aborted between Busy and Ok.",
+                ra_deg, dec_deg,
+            )
+            return SlewOutcome.ABORTED
+        if wait_outcome is WaitOutcome.TIMED_OUT:
+            try:
+                ra_now, dec_now = self.get_position(timeout=3.0)
+                moved = _angular_separation(ra_start, dec_start, ra_now, dec_now)
+                logger.warning(
+                    "slew_to(%g, %g) timed out after %.0fs while mount was "
+                    "still slewing (moved %.3f deg of %.3f deg so far; "
+                    "current %g, %g). Mount continues in background; bump "
+                    "the timeout, poll wait_slew_complete, or abort().",
+                    ra_deg, dec_deg, timeout, moved, requested_dist,
+                    ra_now, dec_now,
+                )
+            except MountError:
+                logger.warning(
+                    "slew_to(%g, %g) timed out after %.0fs while mount was "
+                    "still slewing; current position read failed.",
+                    ra_deg, dec_deg, timeout,
+                )
+            return SlewOutcome.TIMED_OUT
+
         # Driver polls position roughly once per second; give it a cycle.
         time.sleep(1.0)
         try:
             ra_now, dec_now = self.get_position(timeout=3.0)
         except MountError:
-            return False
+            logger.warning(
+                "slew_to(%g, %g) settled but post-slew position read "
+                "failed; treating as timed out.",
+                ra_deg, dec_deg,
+            )
+            return SlewOutcome.TIMED_OUT
         moved = _angular_separation(ra_start, dec_start, ra_now, dec_now)
         err_to_target = _angular_separation(ra_now, dec_now, ra_deg, dec_deg)
 
-        # Fixed-tolerance pass for genuinely no-op slews (sub-arcminute).
         if requested_dist < 0.02 and err_to_target < self.SLEW_ARRIVAL_TOLERANCE_DEG:
-            return True
+            return SlewOutcome.NOOP
 
-        # For real slews, require at least 50 percent of requested motion.
         if moved < 0.5 * requested_dist:
             logger.warning(
-                "slew_to(%g, %g) reported complete but mount only moved "
+                "slew_to(%g, %g) refused by firmware: mount moved only "
                 "%.3f deg of %.3f deg requested (current %g, %g; err to "
-                "target %.3f deg). Likely refused by firmware (horizon / "
-                "zenith / cable-wrap limit, parked state, or alignment "
-                "mismatch).",
+                "target %.3f deg). Common causes: horizon / zenith / "
+                "cable-wrap limit, parked state, slew-limit menu setting, "
+                "or alignment so off the target maps to a no-go zone.",
                 ra_deg, dec_deg, moved, requested_dist, ra_now, dec_now, err_to_target,
             )
-            return False
-        # Optional secondary check: even if we moved most of the way, the
-        # final landing should be within tolerance.
+            return SlewOutcome.REFUSED
         if err_to_target > self.SLEW_ARRIVAL_TOLERANCE_DEG:
             logger.warning(
-                "slew_to(%g, %g) landed %.3f deg from target after moving "
-                "%.3f deg. Tracking drift or partial refusal.",
-                ra_deg, dec_deg, err_to_target, moved,
+                "slew_to(%g, %g) partial: landed %.3f deg from target "
+                "after moving %.3f deg of %.3f deg requested (current "
+                "%g, %g). Tracking drift or alignment offset.",
+                ra_deg, dec_deg, err_to_target, moved, requested_dist,
+                ra_now, dec_now,
             )
-            return False
-        return True
+            return SlewOutcome.PARTIAL
+        return SlewOutcome.ARRIVED
 
     def sync(self, ra_deg: float, dec_deg: float, timeout: float = 10.0) -> bool:
         """Tell the mount its current pointing is the given RA/Dec."""
@@ -545,7 +634,16 @@ class CelestronMount:
         a slew. We must wait for the Busy edge first (otherwise we observe
         the pre-slew Ok and return immediately), then wait for the Ok
         edge (slew settled).
+
+        Thin wrapper over `_wait_slew_complete_outcome` that flattens the
+        result to bool (True only when SETTLED or NOT_STARTED-and-Ok).
+        Use `_wait_slew_complete_outcome` to distinguish "still slewing"
+        from "never started" without grepping logs.
         """
+        outcome = self._wait_slew_complete_outcome(timeout=timeout)
+        return outcome in (WaitOutcome.SETTLED, WaitOutcome.NOT_STARTED)
+
+    def _wait_slew_complete_outcome(self, timeout: float) -> WaitOutcome:
         deadline = time.monotonic() + timeout
         # Phase 1: wait for the slew to actually start. Give the driver up
         # to ~3 seconds to flip Coord state to Busy after our newNumberVector.
@@ -561,7 +659,9 @@ class CelestronMount:
             # one poll, or the driver dropped the request. Treat as a
             # noop slew and check the current state.
             prop = self._client.get_property(self.PROP_COORD)
-            return bool(prop and prop.state == STATE_OK)
+            if prop and prop.state == STATE_OK:
+                return WaitOutcome.NOT_STARTED
+            return WaitOutcome.TIMED_OUT
         # Phase 2: wait for slew to settle.
         try:
             self._client.wait_for_state(
@@ -570,13 +670,12 @@ class CelestronMount:
                 timeout=max(0.1, deadline - time.monotonic()),
             )
         except MountTimeoutError:
-            return False
+            return WaitOutcome.TIMED_OUT
         # If abort was raised between Busy and Ok, the mount stopped
-        # wherever it was, not at the requested target. Report that
-        # honestly to the caller.
+        # wherever it was, not at the requested target.
         if self._abort_pending:
-            return False
-        return True
+            return WaitOutcome.ABORTED
+        return WaitOutcome.SETTLED
 
     def abort(self) -> None:
         self._abort_pending = True
