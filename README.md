@@ -93,7 +93,7 @@ Verify:
 INDI is not in Homebrew core and the upstream repo does not publish macOS binaries, so we build from source. This takes about 20 minutes on Apple Silicon.
 
 ```bash
-brew install cmake libnova zlib gphoto2 libusb cfitsio fftw curl theora libev pkg-config
+brew install cmake libnova zlib gphoto2 libusb cfitsio fftw curl theora libev pkg-config gsl
 git clone --depth 1 https://github.com/indilib/indi.git ~/src/indi
 mkdir -p ~/src/indi/build && cd ~/src/indi/build
 cmake -DCMAKE_INSTALL_PREFIX=/opt/homebrew \
