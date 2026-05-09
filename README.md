@@ -289,20 +289,45 @@ Steps 4 and 5 prompt for confirmation before moving the OTA. Make sure the tube 
 
 ## Pre-session checklist
 
-Run through this every observing session:
+Two commands once everything is wired up. Step 1 is hardware (your hands). Step 2 is software (Mira does the rest).
 
-1. Power on the mount. Battery or AC; the SLT brain needs ~12V.
-2. Use the hand controller to do a deliberately bad alignment. "Solar System Align" pointed at any bright object will do. The 130SLT refuses Goto/sync commands until it thinks it has been aligned, so this fake alignment is just to flip that flag. Mira's first sync will overwrite whatever data this step recorded.
-3. Connect the FTDI cable to the hand controller and the Mac.
-4. Mount the iPhone in the NexYZ DX. Center a bright star in the eyepiece, focus the eyepiece, then center the iPhone camera over the eyepiece via the NexYZ adjusters until the same star is centered in the iPhone's camera preview. Tip: run `mira preview` in another terminal during this step. It opens a live ffplay window of the iPhone feed so you can iterate on the NexYZ knobs while watching, instead of capturing-and-inspecting in a loop.
-5. Start the INDI server in its own terminal: `indiserver -v indi_celestron_gps`.
-6. In another terminal, activate the venv: `source .venv/bin/activate`.
-7. Confirm the camera and mount are alive: `python scripts/test_camera.py && python scripts/test_mount_connect.py`.
-8. You are ready to observe. Use the CLI or talk to Claude Code.
+1. **Hardware**:
+   1. Connect the FTDI cable to the hand controller and the Mac.
+   2. Power on the mount.
+   3. On the hand controller: press Enter at "Press ENTER to begin alignment", confirm the time/location prompts, pick **Solar System Align**, point at anything bright, press Enter to "align". The mount considers itself aligned. (Mira's first plate-solve sync will overwrite this with the real pointing.)
+   4. (Optional) Mount the iPhone afocally over the eyepiece via the NexYZ DX. To center it, run `mira preview` in any terminal while you turn the knobs.
+
+2. **Software**:
+   ```bash
+   cd /Users/andrewsieg/mira
+   source .venv/bin/activate
+   mira up
+   ```
+   That starts indiserver, connects to the mount, and reports current pointing. If the mount fails to connect, the error tells you what to do (usually "you skipped the alignment menus on the hand controller").
+
+After `mira up` you're observing. Drive it any of these ways:
+- `mira jog` for keyboard nudging
+- Talk to Claude Code: "Mira, point at Saturn"
+- Direct CLI: `mira goto Jupiter`, `mira where`, `mira status`
+
+When done:
+```bash
+mira down
+```
+Then power off the mount via the hand controller.
 
 ## Usage
 
 ### CLI
+
+The two lifecycle commands you'll use most:
+
+```bash
+mira up        # start indiserver, connect to mount, report status
+mira down      # disconnect and stop indiserver
+```
+
+Per-task commands:
 
 ```bash
 # Resolve a target name without moving the mount.

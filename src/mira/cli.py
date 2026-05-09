@@ -18,6 +18,7 @@ from .config import ConfigError, load_config, setup_logging
 from .ephemeris import NameNotFoundError
 from .mount import MountError
 from .solver import SolveFailed, SolverError
+from .speech import SpeechError
 from .tools import (
     ToolContext,
     capture_frame,
@@ -174,6 +175,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="wait for playback to finish before returning",
     )
+
+    p_up = sub.add_parser(
+        "up",
+        help="start indiserver and connect; the one-button-up command",
+        description=(
+            "Bring the whole stack online. Starts indiserver in the "
+            "background if it is not already running, waits for it to "
+            "listen on port 7624, then tries to connect to the mount. "
+            "If the connect fails, prints actionable next steps "
+            "(power on, get past the alignment menus). Idempotent: "
+            "running it twice is fine."
+        ),
+    )
+    p_up.add_argument(
+        "--no-voice",
+        action="store_true",
+        help="suppress the spoken 'mira ready' confirmation",
+    )
+
+    p_down = sub.add_parser(
+        "down",
+        help="stop indiserver and free the serial port",
+        description=(
+            "Disconnect from the mount, kill the indiserver process "
+            "Mira started with `mira up`, and clean up state. "
+            "Idempotent."
+        ),
+    )
+    _ = p_down
 
     p_gps = sub.add_parser(
         "gps-push",
@@ -476,6 +506,139 @@ def cmd_voices(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+INDISERVER_PIDFILE = Path("~/mira/indiserver.pid").expanduser()
+INDISERVER_LOGFILE = Path("~/mira/indiserver.log").expanduser()
+
+
+def _indiserver_listening() -> bool:
+    import socket as _socket
+    try:
+        with _socket.create_connection(("localhost", 7624), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import time as _time
+
+    indi_bin = _shutil.which("indiserver")
+    if indi_bin is None:
+        return _exit_with_clean_error(
+            "indiserver not on PATH. Build INDI first (see README step 2b).",
+            code=EXIT_USAGE,
+        )
+
+    # Already up?
+    if _indiserver_listening():
+        print("indiserver: already listening on 7624")
+    else:
+        # Start in background; survive our exit.
+        INDISERVER_LOGFILE.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(INDISERVER_LOGFILE, "ab")
+        proc = _subprocess.Popen(
+            [indi_bin, "-v", "indi_celestron_gps"],
+            stdin=_subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+        )
+        INDISERVER_PIDFILE.write_text(str(proc.pid))
+        # Wait up to 8s for the port to come up.
+        for _ in range(80):
+            _time.sleep(0.1)
+            if _indiserver_listening():
+                break
+        else:
+            return _exit_with_clean_error(
+                "indiserver started but never listened on 7624. "
+                f"see {INDISERVER_LOGFILE}",
+                code=EXIT_FAILURE,
+            )
+        print(f"indiserver: started (pid {proc.pid}, log {INDISERVER_LOGFILE})")
+
+    # Connect to the mount.
+    print("connecting to mount...", end=" ", flush=True)
+    ctx = ToolContext.from_config(args.config)
+    try:
+        try:
+            ctx.connect_mount(timeout=8.0)
+        except MountError as e:
+            print("FAIL")
+            print()
+            print(f"mount: {e}")
+            print()
+            print("If the hand controller still says 'Press ENTER to begin")
+            print("alignment', walk it through any fake alignment (Solar System")
+            print("Align is fastest; pick any object) until you reach the main")
+            print("menu, then re-run `mira up`.")
+            return EXIT_FAILURE
+        ra, dec = ctx.mount.get_position()
+        print("OK")
+        print(f"  pointing: RA={ra:.4f} deg, Dec={dec:.4f} deg")
+        print(f"  observer: lat={ctx.config.observer.latitude:.4f}, lon={ctx.config.observer.longitude:.4f}")
+        print()
+        print("mira is up. Try: mira jog, mira status, or talk to Claude Code.")
+        if not args.no_voice and ctx.speaker is not None and ctx.speaker.is_configured():
+            try:
+                ctx.speaker.speak(
+                    "[excited] Mira is up. The mount is connected. The sky is yours.",
+                    blocking=False,
+                )
+            except SpeechError:
+                pass
+        return EXIT_OK
+    finally:
+        ctx.shutdown()
+
+
+def cmd_down(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+
+    import os as _os
+    import signal as _signal
+
+    killed = False
+    if INDISERVER_PIDFILE.exists():
+        try:
+            pid = int(INDISERVER_PIDFILE.read_text().strip())
+            try:
+                _os.kill(pid, _signal.SIGTERM)
+                killed = True
+                print(f"sent SIGTERM to indiserver (pid {pid})")
+            except ProcessLookupError:
+                print(f"indiserver pid {pid} already gone")
+            INDISERVER_PIDFILE.unlink(missing_ok=True)
+        except (ValueError, OSError):
+            INDISERVER_PIDFILE.unlink(missing_ok=True)
+    if not killed:
+        # Fallback: pkill any indiserver we may have started outside `mira up`.
+        import subprocess as _subprocess
+
+        result = _subprocess.run(
+            ["pkill", "-f", "indiserver.*indi_celestron_gps"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("killed stray indiserver via pkill")
+        elif _indiserver_listening():
+            print("indiserver still listening on 7624 (not started by `mira up`); leaving it alone")
+        else:
+            print("indiserver already down")
+    return EXIT_OK
+
+
 def cmd_gps_push(args: argparse.Namespace) -> int:
     ctx = _build_context(args)
     try:
@@ -547,6 +710,8 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "voices":   cmd_voices,
     "jog":      cmd_jog,
     "gps-push": cmd_gps_push,
+    "up":       cmd_up,
+    "down":     cmd_down,
 }
 
 
