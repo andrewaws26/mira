@@ -337,6 +337,7 @@ class CelestronMount:
         self.device = device
         self.serial_port = serial_port
         self.observer = observer
+        self._abort_pending = False
 
     @property
     def client(self) -> IndiClient:
@@ -457,11 +458,49 @@ class CelestronMount:
             return False
         return prop.state == STATE_BUSY
 
+    SLEW_ARRIVAL_TOLERANCE_DEG = 1.0
+
     def slew_to(self, ra_deg: float, dec_deg: float, timeout: float = 60.0) -> bool:
-        """Slew to apparent RA/Dec. Returns True on completion. Caller should sync first."""
+        """Slew to apparent RA/Dec. Returns True only if the mount actually
+        arrived at the target.
+
+        Returns False if:
+          - the slew was aborted via abort()
+          - wait_slew_complete timed out
+          - the mount's reported position after settling differs from the
+            requested coords by more than SLEW_ARRIVAL_TOLERANCE_DEG.
+
+        The third case catches silent refusals from the Celestron firmware:
+        when the mount considers the target below the horizon or otherwise
+        unreachable (common with a fake alignment), it accepts the slew at
+        the INDI layer but refuses to move the motors. EQUATORIAL_EOD_COORD
+        may not enter Busy at all, or may flip Busy then Ok without motion.
+        Without this delta check, slew_to returned True for slews that
+        physically did nothing.
+        """
+        self._abort_pending = False
         self._set_coord_mode("TRACK")
         self._send_target(ra_deg, dec_deg)
-        return self.wait_slew_complete(timeout=timeout)
+        if not self.wait_slew_complete(timeout=timeout):
+            return False
+        # Verify the mount actually arrived. The driver polls position
+        # roughly once per second; give it one cycle to refresh.
+        time.sleep(1.0)
+        try:
+            ra_now, dec_now = self.get_position(timeout=3.0)
+        except MountError:
+            return False
+        err = _angular_separation(ra_now, dec_now, ra_deg, dec_deg)
+        if err > self.SLEW_ARRIVAL_TOLERANCE_DEG:
+            logger.warning(
+                "slew_to(%g, %g) reported complete but mount is %.3f deg "
+                "from target (current %g, %g). Likely refused by firmware "
+                "(horizon/zenith/cable-wrap limit, parked state, or "
+                "alignment mismatch).",
+                ra_deg, dec_deg, err, ra_now, dec_now,
+            )
+            return False
+        return True
 
     def sync(self, ra_deg: float, dec_deg: float, timeout: float = 10.0) -> bool:
         """Tell the mount its current pointing is the given RA/Dec."""
@@ -507,11 +546,17 @@ class CelestronMount:
                 (STATE_OK,),
                 timeout=max(0.1, deadline - time.monotonic()),
             )
-            return True
         except MountTimeoutError:
             return False
+        # If abort was raised between Busy and Ok, the mount stopped
+        # wherever it was, not at the requested target. Report that
+        # honestly to the caller.
+        if self._abort_pending:
+            return False
+        return True
 
     def abort(self) -> None:
+        self._abort_pending = True
         try:
             self._client.set_switch(self.PROP_ABORT, {"ABORT": True})
         except MountError as e:
@@ -592,3 +637,16 @@ class CelestronMount:
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
         self.disconnect()
+
+
+def _angular_separation(ra1_deg: float, dec1_deg: float, ra2_deg: float, dec2_deg: float) -> float:
+    """Spherical angular separation in degrees, stable for small and large arcs."""
+    import math
+
+    a1 = math.radians(ra1_deg)
+    a2 = math.radians(ra2_deg)
+    d1 = math.radians(dec1_deg)
+    d2 = math.radians(dec2_deg)
+    cos_sep = math.sin(d1) * math.sin(d2) + math.cos(d1) * math.cos(d2) * math.cos(a1 - a2)
+    cos_sep = max(-1.0, min(1.0, cos_sep))
+    return math.degrees(math.acos(cos_sep))
