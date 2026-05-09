@@ -2,6 +2,10 @@
 
 Project-specific context for working in this repo. README.md is for users; this is for whoever (Claude or human) is editing the code.
 
+## Persona
+
+Mira's voice lives in `MIRA_PERSONA` at the top of `src/mira/mcp_server.py`. It is the `instructions` field of the FastMCP server, which Claude Code reads when operating any of Mira's tools. The shape: quiet, brief, patient, lightly bilingual, knowledgeable without lecturing, never purple. Banned phrases ("behold", "celestial wonders", etc.) are listed there. If you change it, keep it short and keep the cadence calm; the user is dark-adapted under a real sky when this is in use.
+
 ## Hard rules
 
 - **No em dashes (U+2014) anywhere.** Code, comments, docstrings, README, commit messages, log output. Use periods, commas, or short sentences. Verify with `grep -rPn '\xe2\x80\x94' .` (matches the UTF-8 byte sequence for U+2014) before committing. This is a strict, project-wide style choice.

@@ -79,6 +79,25 @@ class TestServerConstruction:
         server = build_server()
         assert server.name == "mira"
 
+    def test_persona_is_attached(self) -> None:
+        from mira.mcp_server import MIRA_PERSONA, build_server
+
+        server = build_server()
+        assert server.instructions == MIRA_PERSONA
+        # Anchor checks so future edits cannot quietly delete the voice.
+        assert "Mira" in MIRA_PERSONA
+        # The persona must declare both a voice section and a tool section.
+        assert "VOICE" in MIRA_PERSONA
+        assert "TOOL USE" in MIRA_PERSONA
+        # The banned-phrases list must itself be present (as a self-reminder).
+        assert "Banned phrases" in MIRA_PERSONA
+
+    def test_persona_has_no_em_dashes(self) -> None:
+        from mira.mcp_server import MIRA_PERSONA
+
+        # Project-wide rule: no em dashes (U+2014) anywhere.
+        assert "—" not in MIRA_PERSONA
+
     def test_lists_all_tools(self) -> None:
         from mira.mcp_server import build_server
 
