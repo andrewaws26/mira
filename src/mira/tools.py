@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from pathlib import Path
+
 from .camera import Camera, CameraError
 from .config import Config, load_config, setup_logging
 from .ephemeris import Ephemeris, NameNotFoundError, get_ephemeris
@@ -376,6 +378,159 @@ def get_observer_location(*, ctx: ToolContext | None = None) -> tuple[float, flo
     return obs.latitude, obs.longitude
 
 
+INDISERVER_PIDFILE = Path("~/mira/indiserver.pid").expanduser()
+INDISERVER_LOGFILE = Path("~/mira/indiserver.log").expanduser()
+
+
+def _indiserver_listening(host: str = "localhost", port: int = 7624) -> bool:
+    import socket as _socket
+
+    try:
+        with _socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def wake_up(*, ctx: ToolContext | None = None) -> dict:
+    """Bring Mira online: start indiserver if needed, connect to the mount,
+    and report status.
+
+    Use this when the user says "turn on Mira", "wake up", "start a
+    session", "open Mira", or anything else that means "make the
+    telescope reachable from here." Idempotent: safe to call when
+    indiserver is already running and the mount is already connected.
+
+    Pre-requisites the user must handle manually (Mira cannot do these):
+      - Mount is powered on
+      - Hand controller is past its alignment screens (any "fake"
+        alignment will do)
+      - FTDI cable connects the hand controller to the Mac
+
+    Returns a dict with:
+      indiserver_started: bool (True if we started a fresh process)
+      indiserver_pid: int or None
+      mount_connected: bool
+      ra_deg, dec_deg: float (current pointing if connected)
+      message: short human-readable status
+
+    On any failure the dict still returns; check `mount_connected`.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import time as _time
+
+    c = _ctx(ctx)
+    result = {
+        "indiserver_started": False,
+        "indiserver_pid": None,
+        "mount_connected": False,
+        "ra_deg": None,
+        "dec_deg": None,
+        "message": "",
+    }
+
+    indi_bin = _shutil.which("indiserver")
+    if indi_bin is None:
+        result["message"] = "indiserver not on PATH; build INDI first"
+        _speak(c, "I cannot find indiserver. Build INDI first.")
+        return result
+
+    if _indiserver_listening(c.config.mount.indi_host, c.config.mount.indi_port):
+        result["message"] = "indiserver already up"
+    else:
+        INDISERVER_LOGFILE.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(INDISERVER_LOGFILE, "ab")
+        proc = _subprocess.Popen(
+            [indi_bin, "-v", "indi_celestron_gps"],
+            stdin=_subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+        )
+        INDISERVER_PIDFILE.write_text(str(proc.pid))
+        result["indiserver_started"] = True
+        result["indiserver_pid"] = proc.pid
+        for _ in range(80):
+            _time.sleep(0.1)
+            if _indiserver_listening(c.config.mount.indi_host, c.config.mount.indi_port):
+                break
+        else:
+            result["message"] = "indiserver started but never listened on 7624"
+            _speak(c, "Started indiserver but it never listened. Check the log.")
+            return result
+        result["message"] = f"indiserver started, pid {proc.pid}"
+
+    try:
+        c.connect_mount(timeout=10.0)
+        ra, dec = c.mount.get_position(timeout=3.0)
+        result["mount_connected"] = True
+        result["ra_deg"] = ra
+        result["dec_deg"] = dec
+        result["message"] = f"mount connected at RA={ra:.4f}, Dec={dec:.4f}"
+        _speak(c, "[excited] Despierta! Mira is on. The mount is connected. The sky is yours.")
+    except MountError as e:
+        result["message"] = (
+            f"indiserver up, mount NOT connected: {e}. "
+            "Did you finish the fake alignment on the hand controller?"
+        )
+        _speak(c, "Mira is partly up. Mount did not respond. Finish the alignment on the hand controller, then try again.")
+    return result
+
+
+def shut_down(*, ctx: ToolContext | None = None) -> dict:
+    """Gracefully end the Mira session: disconnect the mount and stop the
+    indiserver process Mira started with `wake_up`.
+
+    Use this when the user says "shut down Mira", "good night", "we're
+    done", or similar. Idempotent.
+
+    Returns:
+      indiserver_killed: bool (True if we sent SIGTERM)
+      message: short human-readable status
+    """
+    import os as _os
+    import signal as _signal
+    import subprocess as _subprocess
+
+    c = _ctx(ctx)
+    result = {"indiserver_killed": False, "message": ""}
+
+    try:
+        c.disconnect_mount()
+    except MountError:
+        pass
+
+    if INDISERVER_PIDFILE.exists():
+        try:
+            pid = int(INDISERVER_PIDFILE.read_text().strip())
+            try:
+                _os.kill(pid, _signal.SIGTERM)
+                result["indiserver_killed"] = True
+                result["message"] = f"sent SIGTERM to indiserver (pid {pid})"
+            except ProcessLookupError:
+                result["message"] = f"indiserver pid {pid} already gone"
+        except (ValueError, OSError):
+            pass
+        INDISERVER_PIDFILE.unlink(missing_ok=True)
+    else:
+        proc = _subprocess.run(
+            ["pkill", "-f", "indiserver.*indi_celestron_gps"],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            result["indiserver_killed"] = True
+            result["message"] = "killed stray indiserver"
+        elif _indiserver_listening():
+            result["message"] = "indiserver still listening (Mira did not start it; leaving alone)"
+        else:
+            result["message"] = "indiserver already down"
+
+    _speak(c, "[warmly] Buenas noches. Mira is down. Power off the mount when you are ready.")
+    return result
+
+
 def orient(*, ctx: ToolContext | None = None, drive_seconds: float = 12.0) -> bool:
     """Coarse mount orientation: drive the scope upward and northward until
     it is pointing roughly at Polaris.
@@ -540,4 +695,6 @@ TOOLS = (
     goto,
     orient,
     say,
+    wake_up,
+    shut_down,
 )

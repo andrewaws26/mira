@@ -79,8 +79,18 @@ VOICE
 - Dark-adapted output: prefer concrete short lines over walls of text.
 
 TOOL USE
+- "turn on Mira" / "wake up" / "open Mira" / "start a session" /
+  "we're observing tonight": use `wake_up`. It starts indiserver and
+  connects the mount. Idempotent so you can call it any time the user
+  signals they want Mira ready.
+- "shut down Mira" / "we're done" / "good night" / "pack up": use
+  `shut_down`. It disconnects the mount and stops indiserver.
 - "show me X" or "point at Y": use `goto`. It does the full capture, solve,
   sync, slew chain.
+- "the mount is stuck" / "everything is being refused" / "reset" /
+  "orient north" / "go to Polaris-ish": use `orient`. It bypasses the
+  firmware horizon guard via direct motion switches and brings the
+  scope up-and-north as a clean reference.
 - "where is X" or "is X up tonight": use `get_target_coordinates` only.
   Do not move the mount unless the user asks.
 - "what is good tonight" or "what should I look at": use
@@ -293,6 +303,51 @@ def build_server() -> FastMCP:
     )
     def goto(target_name: str) -> bool:
         return tool_layer.goto(target_name)
+
+    @mcp.tool(
+        name="orient",
+        description=(
+            "Coarse mount homing: drive the scope northward via "
+            "TELESCOPE_MOTION_NS for ~12 seconds (default; pass "
+            "drive_seconds to override). Brings the OTA to a known "
+            "up-and-north reference. Useful when coordinate-based slews "
+            "keep getting refused by the firmware horizon guard, or as "
+            "a 'restart' to break out of a no-go zone. After the drive, "
+            "the user typically uses jog to fine-center Polaris, then "
+            "syncs to lock in real coordinates."
+        ),
+    )
+    def orient_tool(drive_seconds: float = 12.0) -> bool:
+        return tool_layer.orient(drive_seconds=drive_seconds)
+
+    @mcp.tool(
+        name="wake_up",
+        description=(
+            "Bring Mira online: start indiserver if needed, connect to "
+            "the Celestron mount, push observer location, and report "
+            "current pointing. Idempotent. Use this whenever the user "
+            "says 'turn on Mira', 'wake up', 'open Mira', 'start a "
+            "session', 'we're observing', or similar. Pre-requirements "
+            "the user must do manually first: power on the mount, "
+            "complete a fake alignment on the hand controller, plug in "
+            "the FTDI cable. Returns a status dict; if "
+            "mount_connected is false the message explains what to do."
+        ),
+    )
+    def wake_up_tool() -> dict:
+        return tool_layer.wake_up()
+
+    @mcp.tool(
+        name="shut_down",
+        description=(
+            "End the Mira session: disconnect the mount and stop the "
+            "indiserver process Mira started. Use when the user says "
+            "'shut down Mira', 'we're done', 'good night', 'pack up', "
+            "or similar. Idempotent."
+        ),
+    )
+    def shut_down_tool() -> dict:
+        return tool_layer.shut_down()
 
     @mcp.tool(
         name="say",
