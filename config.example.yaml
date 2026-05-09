@@ -49,7 +49,13 @@ logging:
 
 # Spoken output via ElevenLabs TTS. The API key is read from the
 # ELEVENLABS_API_KEY env var or ~/mira/.env, never from this file.
-# Find more voice IDs with: mira voices
+# Find more voice IDs with: mira voices.
+#
+# Default voice (free tier): Sarah, EXAVITQu4vr4xnSDxMaL.
+# Recommended upgrade voice (Starter plan, $6/mo): Vega, calm
+# Spanish-accented English female narrator named after a bright
+# star Mira will be pointing at. Add from the voice library, then
+# set voice_id below.
 speech:
   enabled: false
   voice_id: EXAVITQu4vr4xnSDxMaL  # Sarah: mature, reassuring, confident
