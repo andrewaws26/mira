@@ -99,6 +99,8 @@ mkdir -p ~/src/indi/build && cd ~/src/indi/build
 cmake -DCMAKE_INSTALL_PREFIX=/opt/homebrew \
       -DINDI_BUILD_SERVER=ON \
       -DINDI_BUILD_DRIVERS=ON \
+      -DCMAKE_INSTALL_RPATH=/opt/homebrew/lib \
+      -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
       ..
 make -j$(sysctl -n hw.ncpu)
 sudo make install
@@ -111,6 +113,14 @@ Verify:
 ```bash
 indiserver -h
 which indi_celestron_gps
+```
+
+If you forgot the `CMAKE_INSTALL_RPATH` flags above and the driver fails to start with `Library not loaded: @rpath/libindidriver.2.dylib`, patch the installed binaries in place:
+
+```bash
+for bin in /opt/homebrew/bin/indi_* /opt/homebrew/bin/indiserver; do
+  install_name_tool -add_rpath /opt/homebrew/lib "$bin" 2>/dev/null
+done
 ```
 
 If you would rather not build INDI yourself, the alternative is INDIGO Server (https://www.indigo-astronomy.org). INDIGO ships a macOS .pkg but uses a different wire protocol; Mira's `mount.py` would need to swap from INDI XML to INDIGO. Stick with INDI for now.
