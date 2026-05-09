@@ -225,15 +225,17 @@ class Solver:
         wcs_path = img.with_suffix(".wcs")
         ini_path = img.with_suffix(".ini")
 
-        text = ""
-        if wcs_path.exists():
-            text = wcs_path.read_text()
-        elif ini_path.exists():
-            text = ini_path.read_text()
-        else:
+        # ASTAP writes .ini on every run (success or failure) but only writes
+        # .wcs on a successful solve. A leftover .wcs from a prior solve will
+        # claim PLTSOLVD=T even when the current run failed. Always prefer the
+        # freshest output: pick whichever of .ini / .wcs has the higher mtime.
+        candidates = [p for p in (ini_path, wcs_path) if p.exists()]
+        if not candidates:
             raise SolveFailed(
                 f"ASTAP exited {result.returncode} with no .wcs/.ini output. "
                 f"stderr: {result.stderr.strip()[:400]}"
             )
+        chosen = max(candidates, key=lambda p: p.stat().st_mtime)
+        text = chosen.read_text()
 
-        return parse_solve_result(text, image_path=img, wcs_path=wcs_path if wcs_path.exists() else ini_path)
+        return parse_solve_result(text, image_path=img, wcs_path=chosen)

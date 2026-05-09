@@ -28,7 +28,7 @@ class TestParseWcs:
         assert d["CTYPE1"] == "RA---TAN"
 
     def test_parses_ini_style(self) -> None:
-        text = (FIXTURES / "sample_solve.ini").read_text()
+        text = (FIXTURES / "sample_ini_solve.ini").read_text()
         d = parse_wcs(text)
         assert d["PLTSOLVD"] == "T"
         assert d["CRVAL1"] == "10.6847"
@@ -64,7 +64,7 @@ class TestParseSolveResult:
         assert result.rotation_deg == pytest.approx(0.5)
 
     def test_success_from_ini(self) -> None:
-        text = (FIXTURES / "sample_solve.ini").read_text()
+        text = (FIXTURES / "sample_ini_solve.ini").read_text()
         result = parse_solve_result(text)
         assert result.ra_deg == pytest.approx(10.6847, abs=1e-4)
         assert result.dec_deg == pytest.approx(41.2691, abs=1e-4)
@@ -105,6 +105,52 @@ class TestSolverConstruction:
         img.write_bytes(b"\xff\xd8\xff")  # not a real JPEG but file exists
         s = Solver(astap_path=tmp_path / "nope-astap")
         with pytest.raises(SolverNotFoundError):
+            s.solve(img)
+
+    def test_stale_wcs_does_not_mask_fresh_failure(self, tmp_path: Path) -> None:
+        """When ASTAP fails, a stale .wcs from a prior successful solve must
+        not produce a false-positive SolveResult. The fresher .ini wins.
+
+        This bit us in the wild: re-running ASTAP on a non-image (or any
+        failed solve) leaves the previous .wcs in place but writes a fresh
+        .ini with PLTSOLVD=F. Without preferring the freshest file we would
+        report success.
+        """
+        from mira.solver import Solver
+
+        # Stage: image, stale .wcs (success), and a fake astap that writes
+        # a fresh .ini with PLTSOLVD=F.
+        img = tmp_path / "img.jpg"
+        img.write_bytes(b"\xff\xd8\xff")
+        wcs = img.with_suffix(".wcs")
+        wcs.write_text(
+            "SIMPLE  =                    T\n"
+            "PLTSOLVD=                    T\n"
+            "CRVAL1  =     279.234734916000\n"
+            "CRVAL2  =      38.783689167000\n"
+            "END\n"
+        )
+        # Make sure .wcs is older than the .ini we write below.
+        import os
+        import time
+
+        old = time.time() - 60
+        os.utime(wcs, (old, old))
+
+        ini_to_write = img.with_suffix(".ini")
+        fake_bin = tmp_path / "astap"
+        fake_bin.write_text(
+            "#!/bin/sh\n"
+            f"cat > {ini_to_write} <<'EOF'\n"
+            "PLTSOLVD=F\n"
+            "ERROR=Not enough stars.\n"
+            "EOF\n"
+            "exit 0\n"
+        )
+        fake_bin.chmod(0o755)
+
+        s = Solver(astap_path=fake_bin)
+        with pytest.raises(SolveFailed, match="Not enough stars"):
             s.solve(img)
 
     def test_solve_missing_image(self, tmp_path: Path) -> None:

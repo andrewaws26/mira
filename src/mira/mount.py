@@ -180,6 +180,17 @@ class IndiClient:
         parts.append("</newNumberVector>")
         self._send("".join(parts))
 
+    def set_text(self, name: str, values: dict[str, str]) -> None:
+        if not self._connected:
+            raise MountNotConnected("not connected")
+        parts = [f"<newTextVector device='{self.device}' name='{name}'>"]
+        for k, v in values.items():
+            # XML-escape the value: tail-end ', <, &, > can break the wire
+            v_esc = v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;")
+            parts.append(f"<oneText name='{k}'>{v_esc}</oneText>")
+        parts.append("</newTextVector>")
+        self._send("".join(parts))
+
     def _send(self, xml: str) -> None:
         if self._sock is None:
             raise MountNotConnected("socket not open")
@@ -287,27 +298,46 @@ class CelestronMount:
     PROP_COORD = "EQUATORIAL_EOD_COORD"
     PROP_ON_COORD_SET = "ON_COORD_SET"
     PROP_ABORT = "TELESCOPE_ABORT_MOTION"
+    PROP_DEVICE_PORT = "DEVICE_PORT"
 
     def __init__(
         self,
         host: str = "localhost",
         port: int = 7624,
         device: str = "Celestron GPS",
+        serial_port: str | None = None,
     ) -> None:
         self._client = IndiClient(host=host, port=port, device=device)
         self.host = host
         self.port = port
         self.device = device
+        self.serial_port = serial_port
 
     @property
     def client(self) -> IndiClient:
         return self._client
 
     def connect(self, timeout: float = 10.0) -> None:
-        """Open INDI connection and bring the driver online."""
+        """Open INDI connection and bring the driver online.
+
+        If `serial_port` was passed at construction (or via config), push it
+        to the driver's DEVICE_PORT property before issuing CONNECT. Without
+        this the Celestron driver tries its compiled-in default
+        (/dev/cu.usbserial) which almost never matches a real FTDI cable's
+        device path (/dev/tty.usbserial-XXXXXXXX).
+        """
         self._client.connect(timeout=timeout)
         # Wait for the CONNECTION property to be defined by the driver.
         self._client.wait_for_property(self.PROP_CONNECTION, timeout=timeout)
+        # Push the configured serial port before connecting.
+        if self.serial_port:
+            try:
+                self._client.wait_for_property(self.PROP_DEVICE_PORT, timeout=timeout)
+                self._client.set_text(self.PROP_DEVICE_PORT, {"PORT": self.serial_port})
+            except MountTimeoutError:
+                logger.warning(
+                    "DEVICE_PORT property not advertised by driver; using its default"
+                )
         prop = self._client.get_property(self.PROP_CONNECTION)
         assert prop is not None
         if not prop.get_switch("CONNECT"):

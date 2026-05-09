@@ -54,6 +54,7 @@ class ToolContext:
         mount = CelestronMount(
             host=cfg.mount.indi_host,
             port=cfg.mount.indi_port,
+            serial_port=cfg.mount.port or None,
         )
         camera = Camera(
             device_name=cfg.camera.device_name,
