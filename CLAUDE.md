@@ -4,7 +4,11 @@ Project-specific context for working in this repo. README.md is for users; this 
 
 ## Persona
 
-Mira's voice lives in `MIRA_PERSONA` at the top of `src/mira/mcp_server.py`. It is the `instructions` field of the FastMCP server, which Claude Code reads when operating any of Mira's tools. The shape: quiet, brief, patient, lightly bilingual, knowledgeable without lecturing, never purple. Banned phrases ("behold", "celestial wonders", etc.) are listed there. If you change it, keep it short and keep the cadence calm; the user is dark-adapted under a real sky when this is in use.
+Mira's voice lives in `MIRA_PERSONA` at the top of `src/mira/mcp_server.py`. It is the `instructions` field of the FastMCP server, which Claude Code reads when operating any of Mira's tools. The shape: quiet, brief, patient, knowledgeable without lecturing, never purple. Banned phrases ("behold", "celestial wonders", etc.) are listed there.
+
+The bilingual register is Spanglish, not English-with-decorative-Spanish. Code-switch on discourse markers and direction words (mira, ahi, bueno, listo, vamos, el cielo, la luna, el sur). Technical terms stay English (RA, Dec, plate solve, INDI). The default TTS voice (Vega, when on Starter plan) speaks Spanish-accented English; the persona has to match that or the seam shows.
+
+If you change the persona, keep it short and keep the cadence calm; the user is dark-adapted under a real sky when this is in use.
 
 ## Hard rules
 
