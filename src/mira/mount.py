@@ -454,8 +454,36 @@ class CelestronMount:
         return True
 
     def wait_slew_complete(self, timeout: float = 60.0) -> bool:
+        """Block until a slew completes.
+
+        EQUATORIAL_EOD_COORD is `Ok` while idle/tracking and `Busy` during
+        a slew. We must wait for the Busy edge first (otherwise we observe
+        the pre-slew Ok and return immediately), then wait for the Ok
+        edge (slew settled).
+        """
+        deadline = time.monotonic() + timeout
+        # Phase 1: wait for the slew to actually start. Give the driver up
+        # to ~3 seconds to flip Coord state to Busy after our newNumberVector.
+        busy_deadline = min(deadline, time.monotonic() + 3.0)
         try:
-            self._client.wait_for_state(self.PROP_COORD, (STATE_OK,), timeout=timeout)
+            self._client.wait_for_state(
+                self.PROP_COORD,
+                (STATE_BUSY,),
+                timeout=max(0.1, busy_deadline - time.monotonic()),
+            )
+        except MountTimeoutError:
+            # No Busy ever seen. Could be a tiny slew that finished within
+            # one poll, or the driver dropped the request. Treat as a
+            # noop slew and check the current state.
+            prop = self._client.get_property(self.PROP_COORD)
+            return bool(prop and prop.state == STATE_OK)
+        # Phase 2: wait for slew to settle.
+        try:
+            self._client.wait_for_state(
+                self.PROP_COORD,
+                (STATE_OK,),
+                timeout=max(0.1, deadline - time.monotonic()),
+            )
             return True
         except MountTimeoutError:
             return False
