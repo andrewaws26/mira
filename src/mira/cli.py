@@ -176,6 +176,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="wait for playback to finish before returning",
     )
 
+    p_orient = sub.add_parser(
+        "orient",
+        help="coarse home: drive the mount north toward Polaris (~12s)",
+        description=(
+            "Drive the mount northward via TELESCOPE_MOTION_NS for a "
+            "fixed duration (default 12 seconds). Brings the scope to a "
+            "known-up reference position so you can center Polaris in "
+            "the eyepiece, then sync. Useful as a 'restart' when fake "
+            "alignment has put the mount in a no-go corner where "
+            "coordinate slews keep getting refused by the firmware."
+        ),
+    )
+    p_orient.add_argument(
+        "--seconds", type=float, default=12.0,
+        help="how long to drive north (default 12s)",
+    )
+
     p_up = sub.add_parser(
         "up",
         help="start indiserver and connect; the one-button-up command",
@@ -519,6 +536,22 @@ def _indiserver_listening() -> bool:
         return False
 
 
+def cmd_orient(args: argparse.Namespace) -> int:
+    ctx = _build_context(args)
+    try:
+        from .tools import orient
+
+        ok = orient(ctx=ctx, drive_seconds=args.seconds)
+        if ok:
+            ra, dec = ctx.mount.get_position()
+            print(f"oriented: now at RA={ra:.4f}, Dec={dec:.4f}")
+            print("center Polaris in the eyepiece (mira jog), then `mira sync`.")
+            return EXIT_OK
+        return _exit_with_clean_error("orient failed; mount did not respond to motion switch")
+    finally:
+        ctx.shutdown()
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -712,6 +745,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "gps-push": cmd_gps_push,
     "up":       cmd_up,
     "down":     cmd_down,
+    "orient":   cmd_orient,
 }
 
 

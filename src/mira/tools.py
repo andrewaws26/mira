@@ -376,6 +376,61 @@ def get_observer_location(*, ctx: ToolContext | None = None) -> tuple[float, flo
     return obs.latitude, obs.longitude
 
 
+def orient(*, ctx: ToolContext | None = None, drive_seconds: float = 12.0) -> bool:
+    """Coarse mount orientation: drive the scope upward and northward until
+    it is pointing roughly at Polaris.
+
+    For users in the Northern Hemisphere, Polaris sits at altitude equal
+    to your latitude (38 degrees from Louisville, KY) and stays fixed.
+    Driving the mount toward it gives a known reference point even when
+    the alignment is fake and coordinate-based slews keep getting
+    refused by the firmware horizon guard.
+
+    Mechanism: this fires the TELESCOPE_MOTION_NS=NORTH switch for
+    `drive_seconds`, then stops. The motion switches drive the motors
+    directly and bypass the coordinate-based goto, so the firmware lock
+    that blocks `slew_to` calls does not apply.
+
+    After the drive, the user typically uses `mira jog` to fine-center
+    Polaris in the eyepiece, then `mira sync` to lock in a real
+    coordinate frame.
+
+    Args:
+        drive_seconds: how long to drive north. Default 12s, which moves
+            the scope through roughly half its travel at slew rate 5.
+
+    Returns:
+        True if the motion switch was successfully sent.
+    """
+    import time as _time
+
+    c = _ctx(ctx)
+    c.connect_mount()
+    _speak(c, "[excited] Orienting north toward Polaris. Drive incoming.")
+    try:
+        c.mount.client.set_switch(
+            "TELESCOPE_MOTION_NS",
+            {"MOTION_NORTH": True, "MOTION_SOUTH": False},
+        )
+        _time.sleep(drive_seconds)
+        c.mount.client.set_switch(
+            "TELESCOPE_MOTION_NS",
+            {"MOTION_NORTH": False, "MOTION_SOUTH": False},
+        )
+    except MountError as e:
+        logger.error("orient: motion switch failed: %s", e)
+        _speak(c, "Orient failed. Mount did not accept the motion switch.")
+        return False
+    _time.sleep(0.5)
+    try:
+        ra, dec = c.mount.get_position(timeout=3.0)
+        logger.info("orient: drove %ss north; now at RA=%.4f Dec=%.4f", drive_seconds, ra, dec)
+    except MountError:
+        pass
+    _speak(c, "[warmly] Pointing roughly north. Center Polaris with jog, then sync.")
+    return True
+
+
 def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
     """Plate-solve current pointing, sync the mount, and slew to a named target.
 
@@ -483,5 +538,6 @@ TOOLS = (
     wait_for_slew_complete,
     get_observer_location,
     goto,
+    orient,
     say,
 )
