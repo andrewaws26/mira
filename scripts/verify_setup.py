@@ -146,6 +146,7 @@ def check_astap_star_db(astap_path: Path, db_name: str) -> CheckResult:
     p = Path(astap_path).expanduser()
     candidates = [
         p.parent,
+        Path("/usr/local/opt/astap"),  # where the macOS d-series .pkg installs
         Path("/Applications/ASTAP.app/Contents/MacOS"),
         Path("~/Library/Application Support/astap").expanduser(),
         Path.home(),
