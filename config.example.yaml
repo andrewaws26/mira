@@ -1,0 +1,48 @@
+# Mira configuration. Copy this file to ~/mira/config.yaml and edit.
+# All paths support ~ expansion.
+
+observer:
+  # Default coordinates are Louisville, KY. Override for your location.
+  latitude: 38.2527        # degrees north, negative for southern hemisphere
+  longitude: -85.7585      # degrees east, negative for west of Greenwich
+  elevation_m: 142         # meters above sea level
+  timezone: America/Kentucky/Louisville
+
+mount:
+  driver: celestron_nexstar
+  # Find your serial port with: ls /dev/tty.usbserial-*
+  # The exact suffix changes per FTDI cable.
+  port: /dev/tty.usbserial-XXXX
+  baud: 9600
+  indi_host: localhost
+  indi_port: 7624
+
+camera:
+  # Continuity Camera device name as seen by AVFoundation.
+  # Run `imagesnap -l` to list available cameras.
+  device_name: iPhone
+  capture_dir: ~/mira/captures
+  warmup_seconds: 1.0      # delay before capture, lets exposure settle
+
+solver:
+  astap_path: /usr/local/bin/astap
+  # Star database name. H17 covers down to mag 17, H18 to mag 18.
+  # H18 is larger but solves dimmer fields. Use H17 if disk space matters.
+  star_db: H18
+  # Estimated field of view in degrees for the iPhone afocal setup.
+  # Tune after first successful solves.
+  estimated_fov_deg: 0.5
+  # How long to let ASTAP search before giving up.
+  timeout_seconds: 60
+
+eyepiece:
+  focal_length_mm: 25
+  fov_arcmin: 30           # approximate true field of view through this eyepiece
+
+# Storage paths. These can stay at the defaults for most users.
+storage:
+  state_db: ~/mira/state.db
+  log_file: ~/mira/mira.log
+
+logging:
+  level: INFO              # DEBUG, INFO, WARNING, ERROR
