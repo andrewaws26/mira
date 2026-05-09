@@ -59,6 +59,12 @@ class TestParser:
         assert args.image == Path("/tmp/x.jpg")
         assert args.ra == 100.5
         assert args.dec == 20.5
+        assert args.fov is None  # default
+
+    def test_solve_with_fov(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["solve", "/tmp/x.jpg", "--fov", "1.5"])
+        assert args.fov == 1.5
 
     def test_capture_optional_output(self) -> None:
         parser = build_parser()

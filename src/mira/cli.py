@@ -115,6 +115,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_solve.add_argument("image", type=Path, help="path to image file")
     p_solve.add_argument("--ra", type=float, default=None, help="RA hint in degrees")
     p_solve.add_argument("--dec", type=float, default=None, help="Dec hint in degrees")
+    p_solve.add_argument(
+        "--fov",
+        type=float,
+        default=None,
+        help="FOV hint in degrees (overrides solver.estimated_fov_deg in config)",
+    )
 
     p_status = sub.add_parser(
         "status",
@@ -260,7 +266,7 @@ def cmd_solve(args: argparse.Namespace) -> int:
         timeout_seconds=cfg.solver.timeout_seconds,
         star_db=cfg.solver.star_db,
     )
-    result = solver.solve(args.image, ra_hint_deg=args.ra, dec_hint_deg=args.dec)
+    result = solver.solve(args.image, ra_hint_deg=args.ra, dec_hint_deg=args.dec, fov_deg=args.fov)
     print(_format_radec(result.ra_deg, result.dec_deg))
     print(_format_radec_sexagesimal(result.ra_deg, result.dec_deg))
     if result.pixel_scale_arcsec is not None:
