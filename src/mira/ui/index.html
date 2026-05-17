@@ -782,7 +782,7 @@ async function loadTools() {
 loadTools();
 
 let termMode = "chat";   // "chat" | "tool"
-let chatHistory = [];    // Anthropic-format messages we send back each turn
+let chatSessionId = null;  // returned by claude CLI for continuation
 
 function setTermMode(mode) {
   termMode = mode;
@@ -792,8 +792,8 @@ function setTermMode(mode) {
   $("term-in").placeholder = mode === "chat" ? "show me Saturn" : "goto target_name=Jupiter";
   $("term-out").innerHTML = "";
   if (mode === "chat") {
-    termLog('chat mode -- talk to mira naturally. e.g. "show me Saturn", "what kind of object is M51?"', "info");
-    chatHistory = [];
+    termLog('chat mode -- talk to mira naturally via your Claude Max subscription. e.g. "show me Saturn", "what kind of object is M51?". Type /new to start a fresh conversation.', "info");
+    chatSessionId = null;
   } else {
     termLog("tool mode -- direct invocation. type 'help' for tools. syntax: tool_name arg=value", "info");
   }
@@ -809,6 +809,7 @@ $("term-in").addEventListener("keydown", async (e) => {
   if (line === "clear") { $("term-out").innerHTML = ""; return; }
   if (line === "/chat") { setTermMode("chat"); return; }
   if (line === "/tool") { setTermMode("tool"); return; }
+  if (line === "/new") { chatSessionId = null; termLog("(new conversation)", "info"); return; }
 
   if (termMode === "chat") {
     await runChat(line);
@@ -822,7 +823,7 @@ async function runChat(message) {
   try {
     const r = await fetch("/chat", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ message, history: chatHistory }),
+      body: JSON.stringify({ message, session_id: chatSessionId }),
     });
     const data = await r.json();
     // Drop the "thinking..." line
@@ -832,15 +833,14 @@ async function runChat(message) {
     }
     if (data.error) {
       termLog("mira> " + data.error, "err");
+      if (data.stderr) termLog("  " + data.stderr, "err");
       return;
     }
-    if (data.tool_calls && data.tool_calls.length) {
-      data.tool_calls.forEach(tc => {
-        termLog("  [called " + tc.tool + "(" + JSON.stringify(tc.args) + ")]", "info");
-      });
-    }
     termLog("mira> " + (data.response || "(no reply)"), "ok");
-    if (data.history) chatHistory = data.history;
+    if (data.duration_ms) {
+      termLog("  (" + (data.duration_ms / 1000).toFixed(1) + "s)", "info");
+    }
+    if (data.session_id) chatSessionId = data.session_id;
   } catch (e) {
     termLog("ERR: " + e, "err");
   }

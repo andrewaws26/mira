@@ -1,248 +1,124 @@
-"""LLM-backed natural language interface to Mira's tools.
+"""Natural language interface to Mira's tools via the local `claude` CLI.
 
-Lets the user type 'show me Saturn' instead of 'goto target_name=Saturn'.
-Routes through the Anthropic Messages API with Mira's TOOLS exposed as
-tool definitions. Claude picks the right tools, the server executes them
-locally with the live ToolContext, results loop back into the conversation,
-final text is returned to the UI.
+The UI's terminal chat mode talks to this. We shell out to Claude Code's
+non-interactive mode (`claude --print --output-format json`) so the
+conversation runs against Andrew's Claude Max subscription instead of
+the metered Anthropic API. Mira's MCP server (registered as `mira` in
+Claude settings) gives claude direct access to all 17 tools, so it can
+goto / classify_target / smart_capture / etc. without us re-wrapping
+each tool definition by hand.
 
-Requires ANTHROPIC_API_KEY in env or ~/mira/.env. Without it, the chat
-endpoint returns a clear error directing the user to set the key.
+Conversation continuity: claude returns a session_id; we pass it back
+to the UI which sends it on the next turn. We then invoke claude with
+`--resume <session_id>` to keep the conversation context.
 
-No SDK dep -- raw urllib to the messages endpoint. Conversation state
-lives in the browser (the UI sends prior turns back with each new
-message) so server has no per-session memory.
+Without the claude CLI installed (it ships with Claude Code), the chat
+endpoint returns a clear error directing the user to install it.
 """
 from __future__ import annotations
 
-import inspect
 import json
 import logging
-import os
-import urllib.error
-import urllib.request
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Optional
+import shutil
+import subprocess
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_VERSION = "2023-06-01"
-MODEL = "claude-sonnet-4-6"
-MAX_TOKENS = 4096
-MAX_TOOL_LOOPS = 8
-
 SYSTEM_PROMPT = """\
-You are Mira, a quiet observing companion for a stargazer at a Celestron NexStar 130SLT.
+You are Mira, the voice of the telescope control system the user is talking
+to through a web UI. The Mira MCP server gives you direct access to the
+telescope tools: goto / smart_capture / classify_target / capture_frame /
+plate_solve / slew_to / get_mount_position / orient / etc.
 
-The user is interacting with you through Mira's web UI. They will say
-things like "show me Saturn" or "what kind of object is M51?" -- pick the
-right tool from the catalog and call it. Don't over-explain; the user can
-see the live preview themselves.
+When the user says "show me Saturn", call goto. When they ask "what kind
+of object is M51?", call classify_target. When they want to capture
+without slewing, call smart_capture. Pick the right tool, call it,
+summarize the result in one or two sentences.
 
-Voice and behavior rules:
+Voice rules:
   - One or two sentences per reply. The UI shows tool results directly,
     so don't repeat them verbatim.
-  - Spanish-accented English (Spanglish) is welcome on conversational
-    interjections (bueno, mira, listo, ahi, despacito) but never on
+  - Spanish-accented English (Spanglish) welcome on conversational
+    interjections (bueno, mira, listo, ahi, despacito); never on
     technical nouns (RA, Dec, ISO, shutter, plate solve, stack).
-  - Never narrate every step. Pick the tool, call it, summarize result.
-  - If a tool fails, surface the actual error briefly; suggest one fix.
-
-Available tools are passed in the tool definitions. When the user asks
-to point at a target, use `goto`. When they ask what kind of object
-something is, use `classify_target`. When they ask to capture without
-slewing, use `smart_capture`. When they ask status, use `get_mount_position`
-or `get_observer_location`.
+  - Don't narrate every step. Pick the tool, call it, brief summary.
+  - On tool failure, surface the error briefly and suggest one fix.
 """
 
 
-def get_api_key() -> Optional[str]:
-    """Look for ANTHROPIC_API_KEY in env first, then ~/mira/.env."""
-    if key := os.environ.get("ANTHROPIC_API_KEY"):
-        return key
-    env_file = Path("~/mira/.env").expanduser()
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("ANTHROPIC_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
-
-
-def build_tool_definitions(tool_layer) -> list[dict]:
-    """Inspect tools.TOOLS and produce Anthropic-format tool definitions."""
-    defs = []
-    for fn in tool_layer.TOOLS:
-        sig = inspect.signature(fn)
-        params = [p for p in sig.parameters.values() if p.name != "ctx"]
-
-        # Build a JSON schema. We don't have full type info for nested
-        # params; treat ints/floats/bools/strs natively, fall back to string.
-        properties: dict[str, dict] = {}
-        required: list[str] = []
-        for p in params:
-            ptype = _python_type_to_json(p.annotation)
-            prop: dict[str, Any] = {"type": ptype}
-            # Anthropic likes description on each param; pull from docstring if possible
-            properties[p.name] = prop
-            if p.default is inspect.Parameter.empty:
-                required.append(p.name)
-
-        desc = (fn.__doc__ or "").strip().split("\n", 1)[0]
-        defs.append({
-            "name": fn.__name__,
-            "description": desc,
-            "input_schema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        })
-    return defs
-
-
-def _python_type_to_json(ann) -> str:
-    """Crude annotation -> JSON Schema type."""
-    if ann in (int,): return "integer"
-    if ann in (float,): return "number"
-    if ann in (bool,): return "boolean"
-    if ann in (str,): return "string"
-    # Optional[T], Union, complex types -> string by default
-    return "string"
+def have_claude_cli() -> bool:
+    return shutil.which("claude") is not None
 
 
 def run_chat(
     message: str,
-    history: list[dict],
-    tool_layer,
-    ctx,
+    session_id: Optional[str] = None,
+    *,
+    timeout_s: float = 180.0,
 ) -> dict:
-    """Single chat turn. Returns {response, tool_calls, error?}.
+    """Single chat turn via the local claude CLI.
 
-    history: prior messages as Anthropic-format dicts
-             [{"role": "user", "content": [...]}, {"role":"assistant",...}]
+    message:    user's latest message
+    session_id: returned from the previous turn; pass back to continue the
+                same conversation. None starts a fresh session.
+
+    Returns: {response, session_id, tool_calls?, error?}
     """
-    api_key = get_api_key()
-    if not api_key:
+    if not have_claude_cli():
         return {
             "error": (
-                "ANTHROPIC_API_KEY not set. Add it to ~/mira/.env or export it. "
-                "The Tool mode (direct tool calls like 'classify_target Saturn') "
-                "still works without an API key."
+                "claude CLI not found on PATH. Install Claude Code to use chat mode "
+                "(https://claude.ai/code). Tool mode (direct tool calls) still works."
             ),
         }
 
-    tools = build_tool_definitions(tool_layer)
-    name_to_fn = {fn.__name__: fn for fn in tool_layer.TOOLS}
+    cmd = [
+        "claude",
+        "--print",
+        "--output-format", "json",
+        "--append-system-prompt", SYSTEM_PROMPT,
+    ]
+    if session_id:
+        cmd += ["--resume", session_id]
+    cmd.append(message)
 
-    messages = list(history) + [{"role": "user", "content": message}]
-    trace: list[dict] = []
+    logger.info("chat: invoking claude CLI (resume=%s, msg=%d chars)",
+                bool(session_id), len(message))
 
-    for loop in range(MAX_TOOL_LOOPS):
-        body = {
-            "model": MODEL,
-            "max_tokens": MAX_TOKENS,
-            "system": SYSTEM_PROMPT,
-            "tools": tools,
-            "messages": messages,
-        }
-        try:
-            resp = _post_anthropic(body, api_key)
-        except urllib.error.HTTPError as e:
-            return {"error": f"Anthropic API error: HTTP {e.code} {e.read().decode(errors='replace')[:200]}"}
-        except (urllib.error.URLError, TimeoutError) as e:
-            return {"error": f"Anthropic API unreachable: {e}"}
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"claude CLI timed out after {timeout_s}s"}
+    except Exception as e:
+        return {"error": f"claude CLI failed to launch: {e}"}
 
-        stop_reason = resp.get("stop_reason")
-        content = resp.get("content", [])
-
-        # Did the model request tools?
-        tool_uses = [c for c in content if c.get("type") == "tool_use"]
-        text_blocks = [c for c in content if c.get("type") == "text"]
-
-        if tool_uses:
-            # Add assistant message (raw content blocks) to history
-            messages.append({"role": "assistant", "content": content})
-            # Execute each tool, build tool_result content
-            tool_results = []
-            for tu in tool_uses:
-                tname = tu["name"]
-                targs = tu.get("input", {}) or {}
-                trace.append({"tool": tname, "args": targs})
-                fn = name_to_fn.get(tname)
-                if fn is None:
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu["id"],
-                        "content": f"unknown tool: {tname}",
-                        "is_error": True,
-                    })
-                    continue
-                try:
-                    out = fn(**targs, ctx=ctx)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu["id"],
-                        "content": json.dumps(_jsonable(out)),
-                    })
-                except Exception as e:
-                    logger.exception("chat: tool %s failed", tname)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu["id"],
-                        "content": f"{type(e).__name__}: {e}",
-                        "is_error": True,
-                    })
-            messages.append({"role": "user", "content": tool_results})
-            continue
-
-        # No tool calls: this is the final assistant response
-        text = "".join(b.get("text", "") for b in text_blocks)
-        # Also append the assistant turn to history for the client to send back
-        messages.append({"role": "assistant", "content": content})
+    if proc.returncode != 0:
         return {
-            "response": text,
-            "tool_calls": trace,
-            "history": messages,
-            "stop_reason": stop_reason,
+            "error": f"claude CLI exited {proc.returncode}",
+            "stderr": proc.stderr.strip()[:500],
+        }
+
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {
+            "error": "claude CLI returned non-JSON output",
+            "raw": proc.stdout[:500],
+        }
+
+    if data.get("is_error"):
+        return {
+            "error": data.get("result") or "claude reported an error",
+            "subtype": data.get("subtype"),
         }
 
     return {
-        "error": f"chat exceeded {MAX_TOOL_LOOPS} tool-use loops without converging",
-        "tool_calls": trace,
+        "response": data.get("result", ""),
+        "session_id": data.get("session_id"),
+        "duration_ms": data.get("duration_ms"),
+        "num_turns": data.get("num_turns"),
     }
-
-
-def _post_anthropic(body: dict, api_key: str) -> dict:
-    req = urllib.request.Request(
-        ANTHROPIC_URL,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": ANTHROPIC_VERSION,
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read())
-
-
-def _jsonable(v: Any) -> Any:
-    if v is None or isinstance(v, (bool, int, float, str)):
-        return v
-    if isinstance(v, (list, tuple)):
-        return [_jsonable(x) for x in v]
-    if isinstance(v, dict):
-        return {k: _jsonable(val) for k, val in v.items()}
-    if isinstance(v, Path):
-        return str(v)
-    if isinstance(v, datetime):
-        return v.isoformat()
-    try:
-        return str(v)
-    except Exception:
-        return repr(v)

@@ -327,19 +327,15 @@ class _PreviewHandler(BaseHTTPRequestHandler):
     # /chat  - LLM-backed natural language interface to tools
     # ------------------------------------------------------------------
     def _handle_chat(self) -> None:
-        if self.mount_ctx is None:
-            self.send_error(503, "chat requires a ToolContext")
-            return
         body = self._read_json()
         message = body.get("message")
-        history = body.get("history") or []
+        session_id = body.get("session_id")
         if not isinstance(message, str) or not message.strip():
-            self.send_error(400, "expected {message: str, history?: [...]}")
+            self.send_error(400, "expected {message: str, session_id?: str}")
             return
         from . import mira_chat
-        from . import tools as tool_layer
         try:
-            result = mira_chat.run_chat(message, history, tool_layer, self.mount_ctx)
+            result = mira_chat.run_chat(message, session_id=session_id)
             self._send_json(result)
         except Exception as e:
             logger.exception("chat failed")
