@@ -43,6 +43,7 @@ from PIL import Image
 
 from .imaging import load_grayscale, sharpness
 from .iphone_camera import IphoneCamera
+from .pipeline_state import patch_state, publish_frame, publish_stack
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,14 @@ def capture_burst(
         logger.info(
             "capture_burst %d/%d: %s (sharp=%.1f, %.2fs)",
             i + 1, n_frames, path.name, sharp, t1 - t0,
+        )
+        # Push to live-preview state so `mira watch` shows progress
+        publish_frame(path)
+        patch_state(
+            phase="capturing",
+            frames_captured=i + 1,
+            frames_target=n_frames,
+            message=f"capturing frame {i + 1}/{n_frames}",
         )
         if pause_s > 0 and i < n_frames - 1:
             time.sleep(pause_s)
@@ -274,6 +283,14 @@ def lucky_image(
         aligned_count, len(kept), elapsed, out,
     )
 
+    publish_stack(out)
+    patch_state(
+        phase="done",
+        frames_stacked=aligned_count,
+        output_path=str(out),
+        message=f"lucky-stack of {aligned_count} frames in {elapsed:.1f}s",
+    )
+
     return StackResult(
         output_path=out,
         n_captured=len(frames),
@@ -312,15 +329,27 @@ def live_stack(
     reference = load_grayscale(frames[0].path)
     aligned: list[np.ndarray] = [reference]
     aligned_count = 1
-    for fm in frames[1:]:
+    # Publish the very first frame as the initial "stack" so the user
+    # sees something before averaging starts to take effect.
+    Image.fromarray(reference).save(work_dir / "_progress.jpg", quality=92)
+    publish_stack(work_dir / "_progress.jpg")
+
+    for idx, fm in enumerate(frames[1:], start=2):
         tgt = load_grayscale(fm.path)
-        # Phase correlation is faster than ECC and accurate enough for
-        # extended targets where local features dominate.
         warped = align_phase_correlation(reference, tgt) if align_mode == "translation" \
             else align_to_reference(reference, tgt, mode=align_mode)
         if warped is not None:
             aligned.append(warped)
             aligned_count += 1
+            # Publish the running stack so `mira watch` shows it improving
+            partial = stack_sum_normalized(aligned)
+            Image.fromarray(partial).save(work_dir / "_progress.jpg", quality=92)
+            publish_stack(work_dir / "_progress.jpg")
+            patch_state(
+                phase="stacking",
+                frames_stacked=aligned_count,
+                message=f"live-stack {aligned_count}/{len(frames)} aligned",
+            )
 
     stacked = stack_sum_normalized(aligned)
 
@@ -328,6 +357,14 @@ def live_stack(
     Image.fromarray(stacked).save(out, quality=92)
     elapsed = time.monotonic() - t0
     logger.info("live_stack: stacked %d frames in %.1fs -> %s", aligned_count, elapsed, out)
+
+    publish_stack(out)
+    patch_state(
+        phase="done",
+        frames_stacked=aligned_count,
+        output_path=str(out),
+        message=f"live-stack of {aligned_count} frames in {elapsed:.1f}s",
+    )
 
     return StackResult(
         output_path=out,

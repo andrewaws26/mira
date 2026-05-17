@@ -279,6 +279,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = p_gps
 
+    p_watch = sub.add_parser(
+        "watch",
+        help="serve a live web UI showing current capture + jog controls",
+        description=(
+            "Start a small HTTP server (default port 8090) that renders a "
+            "dark-themed web page with: the latest captured frame, the "
+            "current in-progress stack, the iPhone's live sensor feed "
+            "(when --iphone-url or iphone_bridge config), and Mira's "
+            "current capture state. With --jog, arrow keys on the page "
+            "drive the mount's motion switches and number keys 1-9 set "
+            "the slew rate. Open the URL the server prints on the Mac or "
+            "the iPhone -- same page works on both."
+        ),
+    )
+    p_watch.add_argument(
+        "--port", type=int, default=8090, help="port to bind on (default 8090)",
+    )
+    p_watch.add_argument(
+        "--jog", action="store_true",
+        help="enable mount control over HTTP (arrow keys move the scope)",
+    )
+    p_watch.add_argument(
+        "--iphone-url", type=str, default=None,
+        help="iPhone bridge URL (e.g. http://192.168.1.55:8080). Defaults to config.camera.iphone_url.",
+    )
+
     p_jog = sub.add_parser(
         "jog",
         help="keyboard control of the mount (curses TUI)",
@@ -988,6 +1014,35 @@ def cmd_preview(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_watch(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .preview_server import serve
+
+    iphone_url = args.iphone_url or cfg.camera.iphone_url
+
+    mount_ctx = None
+    if args.jog:
+        # Spin up a real ToolContext + connect to indiserver.
+        mount_ctx = _build_context(args)
+        try:
+            mount_ctx.connect_mount(timeout=10.0)
+        except Exception as e:
+            mount_ctx.shutdown()
+            return _exit_with_clean_error(
+                f"jog requested but mount connect failed: {e}. Is 'mira up' running?"
+            )
+
+    try:
+        serve(port=args.port, iphone_url=iphone_url, mount_ctx=mount_ctx)
+    finally:
+        if mount_ctx is not None:
+            mount_ctx.shutdown()
+    return EXIT_OK
+
+
 def cmd_fly(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -1007,6 +1062,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "devices":  cmd_devices,
     "resolve":  cmd_resolve,
     "preview":  cmd_preview,
+    "watch":    cmd_watch,
     "compose":  cmd_compose,
     "sfx":      cmd_sfx,
     "say":      cmd_say,

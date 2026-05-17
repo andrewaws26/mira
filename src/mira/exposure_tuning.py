@@ -27,6 +27,7 @@ from typing import Optional
 
 from .imaging import analyze, FrameReport
 from .iphone_camera import IphoneCamera, IphoneCameraError
+from .pipeline_state import patch_state, publish_frame
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,16 @@ def tune_for_target(
             step, iso, duration_ms,
             report.luminance.mean, report.luminance.frac_black * 100,
             report.luminance.frac_white * 100, report.stars.count,
+        )
+
+        # Push to preview state so `mira watch` shows the tuning progress.
+        publish_frame(capture_path)
+        patch_state(
+            phase="tuning",
+            iso=iso,
+            shutter_ms=duration_ms,
+            mean_lum=report.luminance.mean,
+            message=f"tune step {step + 1}/{max_iterations}: ISO {iso:.0f} @ {duration_ms:.1f}ms → mean {report.luminance.mean:.1f}",
         )
 
         # Decide next action

@@ -27,6 +27,7 @@ from .exposure_tuning import tune_for_target, PRESETS as EXPOSURE_PRESETS
 from .stacking import lucky_image, live_stack, StackResult
 from .moon_processing import process_moon_frame
 from .target_type import classify_with_confidence
+from . import pipeline_state
 from .mount import CelestronMount, MountError, ObserverInfo
 from .narration import CompositionError, CompositionResult, compose
 from .sfx import SfxError, SfxResult, generate as generate_sfx_audio
@@ -1773,9 +1774,18 @@ def smart_capture(
         target_name, category, reason, pipeline,
     )
 
+    # Reset preview state at the top of a new session so the watch page
+    # doesn't show stale data from a previous run.
+    pipeline_state.reset()
+    pipeline_state.patch_state(
+        target=target_name, category=category, pipeline=pipeline,
+        phase="starting", message=f"{reason}",
+    )
+
     if not isinstance(cam, IphoneCamera):
         # imagesnap fallback: single capture, no exposure tuning available
         logger.info("smart_capture: imagesnap backend, falling back to capture_frame()")
+        pipeline_state.patch_state(phase="capturing", message="imagesnap fallback")
         return capture_frame(ctx=c)
 
     # Step 1: auto-tune exposure for this target type
