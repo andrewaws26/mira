@@ -74,15 +74,29 @@ def run_chat(
             ),
         }
 
+    # Allow every Mira MCP tool without prompting. Claude Code in
+    # --print mode defaults to don't-ask for safety, which blocks tool
+    # invocations and forces the model to answer from general knowledge.
+    # We enumerate Mira's tools (mcp__mira__<name>) so the chat can
+    # actually drive the telescope while still refusing unrelated tools
+    # like Bash or Edit.
+    from . import tools as tool_layer
+    allowed_tools = [f"mcp__mira__{fn.__name__}" for fn in tool_layer.TOOLS]
+
+    # CLI's --allowedTools accepts comma-separated as one arg. Passing
+    # multiple positional values would eat the prompt argument.
     cmd = [
         "claude",
         "--print",
         "--output-format", "json",
         "--append-system-prompt", SYSTEM_PROMPT,
+        "--allowedTools", ",".join(allowed_tools),
     ]
     if session_id:
         cmd += ["--resume", session_id]
-    cmd.append(message)
+    # The -- separator is required after --allowedTools (variadic) so
+    # argparse doesn't swallow the prompt as another tool name.
+    cmd += ["--", message]
 
     logger.info("chat: invoking claude CLI (resume=%s, msg=%d chars)",
                 bool(session_id), len(message))

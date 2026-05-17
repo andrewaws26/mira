@@ -679,8 +679,16 @@ async function refreshHealth() {
     const h = await r.json();
     $("pill-mount").textContent = h.mount.connected ? "mount up" : "mount down";
     $("pill-mount").className = "pill " + (h.mount.connected ? "ok" : "err");
-    $("pill-cam").textContent = h.camera.reachable ? "camera ok" : "camera down";
-    $("pill-cam").className = "pill " + (h.camera.reachable ? "ok" : "warn");
+    if (h.camera.reachable === null) {
+      $("pill-cam").textContent = "camera ?";
+      $("pill-cam").className = "pill";
+    } else if (h.camera.reachable) {
+      $("pill-cam").textContent = "camera ok";
+      $("pill-cam").className = "pill ok";
+    } else {
+      $("pill-cam").textContent = "camera down";
+      $("pill-cam").className = "pill err";
+    }
     $("pill-jog").textContent = h.jog_enabled ? "jog enabled" : "jog off";
     $("pill-jog").className = "pill " + (h.jog_enabled ? "ok" : "");
     $("version").textContent = h.version || "v0";
@@ -692,7 +700,9 @@ async function refreshHealth() {
     }
     $("st-mount-slewing").textContent = h.mount.slewing ? "yes" : "no";
     $("st-cam-src").textContent = h.camera.source || "?";
-    $("st-cam-up").textContent = h.camera.reachable ? "yes" : "no";
+    $("st-cam-up").textContent =
+      h.camera.reachable === null ? "unknown (no iphone url)"
+      : h.camera.reachable ? "yes" : "no";
     $("st-cam-last").textContent = h.camera.last_capture || "-";
     if (h.observer) {
       $("st-lat").textContent = h.observer.latitude_deg.toFixed(4) + "°";

@@ -253,7 +253,10 @@ class _PreviewHandler(BaseHTTPRequestHandler):
                     pass
 
             status["camera"]["source"] = cfg.camera.source
-            status["camera"]["reachable"] = _camera_reachable(cfg)
+            # The iphone proxy URL is separate from config.camera.source; both
+            # come into play. Surface what's actually probeable.
+            status["camera"]["iphone_url"] = self.iphone_url
+            status["camera"]["reachable"] = _camera_reachable(self.iphone_url)
             try:
                 status["observer"] = {
                     "latitude_deg": cfg.observer.latitude,
@@ -500,15 +503,16 @@ def serve(
         server.server_close()
 
 
-def _camera_reachable(cfg) -> bool:
-    """Best-effort camera health check. Doesn't capture, just probes."""
+def _camera_reachable(iphone_url: Optional[str]) -> Optional[bool]:
+    """Probe whatever iPhone bridge URL the server has, regardless of
+    config.camera.source. Returns None when no URL is configured
+    (status panel renders "unknown" rather than misleading "yes")."""
+    if not iphone_url:
+        return None
     try:
-        if cfg.camera.source == "iphone_bridge" and cfg.camera.iphone_url:
-            req = urllib.request.Request(f"{cfg.camera.iphone_url.rstrip('/')}/health")
-            with urllib.request.urlopen(req, timeout=1.5) as r:
-                return r.status == 200
-        # imagesnap path: assume reachable, no cheap health check
-        return True
+        req = urllib.request.Request(f"{iphone_url.rstrip('/')}/health")
+        with urllib.request.urlopen(req, timeout=1.5) as r:
+            return r.status == 200
     except Exception:
         return False
 
