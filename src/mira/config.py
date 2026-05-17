@@ -11,7 +11,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 
@@ -58,10 +58,32 @@ class CameraConfig:
     device_name: str = "iPhone"
     capture_dir: Path = field(default_factory=lambda: Path("~/mira/captures").expanduser())
     warmup_seconds: float = 1.0
+    # Newtonian reflectors invert the image 180 degrees. When true, captured
+    # JPGs and the live preview window are rotated 180 degrees in software
+    # so what you see matches the real-world orientation. Plate solving
+    # works equally well either way.
+    flip_180: bool = True
+
+    # Capture backend selection.
+    #   "imagesnap"     -- legacy: iPhone via Continuity Camera + imagesnap
+    #                      (auto-exposure only, no manual ISO/shutter)
+    #   "iphone_bridge" -- HTTP to the MiraCam iOS app, true manual ISO /
+    #                      shutter / focus, JPEG via /preview.jpg
+    source: str = "imagesnap"
+    # Used when source == "iphone_bridge". If null, falls back to Bonjour
+    # discovery (looks for _miracam._tcp on the LAN).
+    iphone_url: Optional[str] = None
+    # Bonjour discovery timeout in seconds.
+    iphone_discovery_timeout_s: float = 5.0
 
     def validate(self) -> None:
-        if not self.device_name:
-            raise ConfigError("camera.device_name is required")
+        if self.source not in ("imagesnap", "iphone_bridge"):
+            raise ConfigError(
+                f"camera.source must be 'imagesnap' or 'iphone_bridge', got {self.source!r}"
+            )
+        if self.source == "imagesnap":
+            if not self.device_name:
+                raise ConfigError("camera.device_name is required for imagesnap source")
         if self.warmup_seconds < 0:
             raise ConfigError("camera.warmup_seconds must be non-negative")
 
@@ -212,6 +234,7 @@ def _from_dict(raw: dict) -> Config:
         device_name=str(cam_raw.get("device_name", "iPhone")),
         capture_dir=_expand_path(cam_raw.get("capture_dir", "~/mira/captures")),
         warmup_seconds=float(cam_raw.get("warmup_seconds", 1.0)),
+        flip_180=bool(cam_raw.get("flip_180", True)),
     )
 
     sol_raw = raw.get("solver", {}) or {}
