@@ -8,13 +8,13 @@ Conversational telescope control for the Celestron NexStar 130SLT.
 
 ## What Mira is
 
-Mira is a system that lets you point a Celestron NexStar 130SLT at any patch of sky, say something like "Mira, show me Jupiter," and have the telescope plate-solve the current pointing then slew to the target. No traditional star alignment is required. The bad alignment you do at startup gets overwritten the moment your first image solves.
+Mira is a system that lets you point a Celestron NexStar 130SLT at any patch of sky, say something like "Mira, show me Jupiter," and have the telescope plate-solve the current pointing, slew to the target, auto-tune the iPhone camera's ISO + shutter for that target type, and capture a final image via the right pipeline (lucky imaging for planets, live stacking for deep-sky, stretch + sharpen for the Moon). No traditional star alignment is required. The bad alignment you do at startup gets overwritten the moment your first image solves.
 
 Mira is named for the Spanish word "look" and the variable star Mira in Cetus. The bilingual name fits the household it was built in.
 
-The core idea: an iPhone afocally mounted over the eyepiece is a wide-enough field that ASTAP can plate-solve the captured frame, then we sync the mount to the solved coordinates and slew anywhere we want.
+The core idea: an iPhone afocally mounted over the eyepiece is wide-enough field that ASTAP can plate-solve the captured frame, the mount syncs to the solved coordinates and slews anywhere we want, and a companion iOS app (`MiraCam`, in a separate repo at https://github.com/andrewaws26/miracam-mobile) exposes the iPhone's manual ISO + shutter over WiFi so Mira can drive long-exposure astrophotography that Continuity Camera blocks.
 
-The system runs entirely on the Mac. There is no cloud component. There is no LLM in the data path. Claude Code talks to a local MCP server that calls Python tool functions on the same machine.
+The system runs entirely on the Mac and your local network. There is no cloud component. There is no LLM in the data path. Claude Code talks to a local MCP server that calls Python tool functions on the same machine.
 
 ## Hardware
 
@@ -22,11 +22,20 @@ The system runs entirely on the Mac. There is no cloud component. There is no LL
 - Celestron NexStar 130SLT telescope on the standard SLT alt-az mount.
 - Celestron NexStar+ hand controller.
 - FTDI USB-to-RJ12 serial cable to connect the hand controller to the Mac. Off-the-shelf USB-to-RJ12 cables work; the genuine Celestron PC cable also works.
-- iPhone 16 Plus (or any modern iPhone supporting Continuity Camera) on the same Apple ID as the Mac.
+- iPhone 16 Plus (or any modern iPhone). Used either as a Continuity Camera (auto-exposure only) or via the MiraCam companion app over WiFi (true manual ISO + shutter).
 - Celestron NexYZ DX adapter to mount the iPhone afocally over the eyepiece.
 - 25mm Plossl eyepiece. Approximately 30 arcminutes true field with the 130SLT.
 
 Other Celestron NexStar mounts that present the same hand-controller serial protocol should work; the INDI driver name in the config is the only piece that may need adjustment.
+
+### Two camera modes
+
+Mira supports two camera backends, selected in `config.yaml`:
+
+- **`imagesnap` (Continuity Camera):** zero-setup, but Apple locks the iPhone to auto-exposure when it presents as a webcam. Fine for plate solving and bright targets, useless for nebulae or long exposures.
+- **`iphone_bridge` (MiraCam app):** the iPhone runs a small Expo/React-Native app that talks to AVCaptureDevice directly with full manual control, then exposes HTTP endpoints over WiFi. Mira drives ISO, shutter (down to 1s exposures on iPhone 16), and lens position programmatically. Required for the smart-capture pipeline (auto-tune + lucky imaging + live stacking).
+
+MiraCam lives in its own repo at https://github.com/andrewaws26/miracam-mobile and is a hard prerequisite for `source: iphone_bridge`. Sideload via Xcode once, then Mira drives it from then on.
 
 ## Software prerequisites
 
@@ -36,9 +45,11 @@ Other Celestron NexStar mounts that present the same hand-controller serial prot
 - INDI (libindi + Celestron NexStar driver). On macOS this comes via Homebrew.
 - ASTAP for plate solving. https://www.hnsky.org/astap.htm
 - ASTAP star database (H17 or H18). One-time download, several gigabytes.
-- imagesnap for camera capture. https://github.com/rharder/imagesnap
+- imagesnap for camera capture (only if you use the `imagesnap` backend). https://github.com/rharder/imagesnap
 - ffmpeg (provides ffplay) for the `mira preview` live window. https://ffmpeg.org
+- Python: `Pillow`, `opencv-python-headless`, and `zeroconf` (pulled by `pip install -e .`). Used by the smart-capture pipeline and Bonjour discovery of MiraCam.
 - ElevenLabs API key (optional) for spoken output. https://elevenlabs.io. Free tier (10k chars/mo) is enough for several observing sessions.
+- For the iPhone bridge backend: MiraCam iOS app (separate repo, https://github.com/andrewaws26/miracam-mobile). Requires Xcode 16+ and a free Apple Developer account for sideloading.
 
 ## Installation
 
@@ -217,6 +228,9 @@ Edit at minimum:
 - `observer.latitude` and `observer.longitude` for your location
 - `mount.port` to the path you found in step 7. **Use the `cu.` form, not `tty.`**, on macOS. The Celestron INDI driver auto-saves `cu.usbserial-XXX` and overriding with the `tty.` variant changes the open semantics in a way the driver cannot handle (CONNECT will succeed but the mount handshake will silently fail).
 - `solver.astap_path` if ASTAP is not at `/usr/local/bin/astap`. On Apple Silicon Homebrew it is usually at `/Applications/ASTAP.app/Contents/MacOS/astap`.
+- `camera.source` to either `imagesnap` (legacy auto-exposure) or `iphone_bridge` (manual control via MiraCam). If you pick `iphone_bridge`, set `camera.iphone_url` to your iPhone's URL (e.g. `http://192.168.1.55:8080`) or leave it null to discover via Bonjour.
+
+For the smart-capture pipeline (`source: iphone_bridge`), follow the MiraCam setup at https://github.com/andrewaws26/miracam-mobile before this step. You need MiraCam running on the iPhone before Mira's iPhone bridge will work.
 
 Verify the config loads:
 
@@ -336,14 +350,33 @@ mira resolve Jupiter
 # Capture a frame and save it.
 mira capture --output /tmp/test.jpg
 
+# Smart-capture WITHOUT slewing: tune exposure for the target type and
+# run the right pipeline (lucky imaging for planets, live stack for
+# deep-sky, stretch+sharpen for moon, single tuned frame for stars).
+# Requires source: iphone_bridge in config.yaml.
+mira capture --target Jupiter            # lucky imaging burst
+mira capture --target M42                # live stack
+mira capture --target Moon               # moon processing
+mira capture --target M42 --pipeline lucky --n-frames 60  # overrides
+
 # Solve a saved image.
 mira solve /tmp/test.jpg
 
 # Read the mount's current position.
 mira where
 
-# Live preview window of the iPhone feed (use during alignment).
+# Live preview window of the iPhone feed (ffplay, AVFoundation -- for
+# centering during alignment).
 mira preview
+
+# Live web UI: latest captured frame + in-progress stack + camera state
+# + iPhone live feed. Opens at http://<mac-ip>:8090. Same URL works on
+# the Mac and on the iPhone via Safari.
+mira watch
+
+# Same, plus arrow-key mount control over the LAN. Number keys 1-9 set
+# slew rate. Hold to move, release to stop. Q stops all motion.
+mira watch --jog
 
 # Speak text out loud through the configured TTS voice.
 mira say "Saturn is up tonight"
@@ -351,14 +384,28 @@ mira say "Saturn is up tonight"
 # List available ElevenLabs voices.
 mira voices
 
+# Generate a sound effect and save it.
+mira sfx "a single deep conch shell call across open ocean at dusk" --duration 6
+
+# Compose a narrated audio piece (voice + matched music + optional bookend SFX).
+# Auto-tunes voice settings from the script's audio tags. Saves to
+# ~/mira/captures/narrations/.
+mira compose path/to/story.txt \
+  --music "cinematic Polynesian voyaging anthem with pahu drums..." \
+  --intro-sfx "deep conch shell call with reverb tail" \
+  --outro-sfx "soft ocean waves and distant insect chorus"
+
 # Capture, solve, and sync (no slew).
 mira sync
 
-# The headline operation: capture, solve, sync, slew to a named target.
-mira goto Jupiter
-mira goto M31
-mira goto Vega
-mira goto "Orion Nebula"
+# The headline operation: capture, solve, sync, slew to a named target,
+# then run the target-aware smart capture pipeline.
+mira goto Jupiter                   # slew + lucky-imaging burst
+mira goto M31                       # slew + live stack
+mira goto Vega                      # slew + single tuned frame
+mira goto "Orion Nebula"            # alias resolves to M42 -> live stack
+mira goto Saturn --no-capture       # slew only, skip the smart capture
+mira goto Moon --out ~/Pictures/moon-tonight.jpg
 
 # Show mount status, last sync, last slew.
 mira status
@@ -391,21 +438,36 @@ Register Mira as an MCP server in your Claude Code settings. Open Claude Code's 
 Restart Claude Code. You can now ask things like:
 
 - "Mira, where is the telescope pointed right now?"
-- "Mira, show me Jupiter."
-- "Mira, take a frame and tell me what stars are in it."
+- "Mira, show me Jupiter." → goto with the lucky-imaging pipeline auto-selected
+- "Mira, what kind of target is M51 and how would you capture it?" → calls `classify_target("M51")` and explains the routing before acting
 - "Mira, point at M31 then move 30 arcminutes east."
+- "Mira, recapture without slewing." → `smart_capture(last_target)` re-runs the pipeline on the current pointing
+- "Mira, compose a 90 second piece about the Pleiades with a soft acoustic bed, conch intro, ocean outro."
 
-Claude picks the right tool from the descriptions Mira ships in the MCP schema.
+Claude picks the right tool from the descriptions Mira ships in the MCP schema. The smart-capture pipeline is the default behavior of `goto`, so "show me X" is enough to trigger the full slew + tune + lucky-image / live-stack / moon-process flow.
 
 ## Architecture
 
 Three layers:
 
-1. **Tool functions** (`mira/tools.py`): standalone Python functions that do the actual work. Nine of them: `get_target_coordinates`, `capture_frame`, `plate_solve`, `sync_mount`, `slew_to`, `get_mount_position`, `wait_for_slew_complete`, `get_observer_location`, and `goto`. Every one has type hints and docstrings, and is unit-tested with mocked hardware.
+1. **Tool functions** (`mira/tools.py`): standalone Python functions that do the actual work. The main set: `get_target_coordinates`, `capture_frame`, `plate_solve`, `sync_mount`, `slew_to`, `get_mount_position`, `wait_for_slew_complete`, `get_observer_location`, `goto`, `smart_capture`, `classify_target`, `orient`. Every one has type hints and docstrings, and is unit-tested with mocked hardware.
 
-2. **CLI** (`mira/cli.py`): an argparse wrapper around the tool layer. Subcommands `goto`, `sync`, `where`, `capture`, `solve`, `status`, `devices`, `resolve`. Designed to work without an LLM, including offline.
+2. **CLI** (`mira/cli.py`): an argparse wrapper around the tool layer. Subcommands include `goto`, `sync`, `where`, `capture` (with `--target` for smart-capture without slewing), `solve`, `status`, `devices`, `resolve`, `preview`, `watch` (web UI + optional jog), `jog`. Designed to work without an LLM, including offline.
 
 3. **MCP server** (`mira/mcp_server.py`): exposes the same tool functions over the Model Context Protocol so Claude Code can call them. Uses the official MCP Python SDK with FastMCP. Each tool's docstring becomes the MCP description; type hints become the JSON schema.
+
+Underneath, the smart-capture pipeline modules sit between the tool layer and the hardware:
+
+- `camera.py` / `iphone_camera.py` -- two camera backends, selected by `config.yaml`. `iphone_camera.py` is an HTTP client for the MiraCam iOS app (separate repo).
+- `imaging.py` -- pure-function image primitives (luminance, star count, sharpness).
+- `exposure_tuning.py` -- per-target preset table + closed-loop ISO/shutter tuner.
+- `stacking.py` -- lucky imaging (burst + rank + ECC align + mean stack) and live stacking (timed capture + phase-correlation align + sum + normalize).
+- `moon_processing.py` -- single-frame stretch + unsharp mask + gamma on the luminance channel.
+- `target_type.py` -- name -> category classifier (moon / planet / cluster / nebula / galaxy / star / default).
+- `pipeline_state.py` -- file-based IPC for the live preview (`~/mira/captures/current/`).
+- `preview_server.py` -- stdlib HTTP server that renders the live preview web page; optional `--jog` mode adds mount control endpoints.
+
+Hardware modules stay isolated: `mount.py` (INDI XML over TCP), `camera.py` (imagesnap subprocess), `solver.py` (ASTAP subprocess). Each can be mocked for tests.
 
 Supporting modules:
 
