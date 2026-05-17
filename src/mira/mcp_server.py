@@ -302,13 +302,67 @@ def build_server() -> FastMCP:
         description=(
             "Headline flow: resolve a target name, capture a frame of the "
             "current sky, plate-solve to learn true pointing, sync the mount, "
-            "and slew to the target. No prior star alignment is required. "
-            "Returns true if the mount reached the target. Use this whenever "
-            "the user says 'show me X' or 'point at Y'."
+            "slew to the target, AND (when iPhone bridge is the camera) run "
+            "the target-aware smart capture pipeline -- target-tuned ISO + "
+            "shutter, then lucky-imaging burst for planets, live-stack for "
+            "deep-sky, stretch+sharpen for the Moon, or a single tuned frame "
+            "for stars. No prior star alignment is required. Returns true if "
+            "the mount reached the target. Use this whenever the user says "
+            "'show me X' or 'point at Y'."
         ),
     )
-    def goto(target_name: str) -> bool:
-        return tool_layer.goto(target_name)
+    def goto(
+        target_name: str,
+        auto_capture: bool = True,
+        capture_out: Optional[str] = None,
+    ) -> bool:
+        return tool_layer.goto(
+            target_name,
+            auto_capture=auto_capture,
+            capture_out=capture_out,
+        )
+
+    @mcp.tool(
+        name="smart_capture",
+        description=(
+            "Run the target-aware capture pipeline at the CURRENT pointing "
+            "without slewing. Auto-tunes the iPhone's ISO + shutter for the "
+            "given target type, then runs the right capture pipeline (lucky "
+            "imaging for planets, live stack for deep-sky, stretch+sharpen "
+            "for moon, single tuned frame for stars). Use this when the "
+            "telescope is already on a target and the user wants to capture "
+            "without re-slewing, or for indoor testing without a mount. "
+            "pipeline override accepts 'lucky' | 'live' | 'moon' | 'single'. "
+            "Returns the path to the final image, or null on failure."
+        ),
+    )
+    def smart_capture(
+        target_name: str,
+        pipeline: Optional[str] = None,
+        n_frames: Optional[int] = None,
+        out_path: Optional[str] = None,
+    ) -> Optional[str]:
+        result = tool_layer.smart_capture(
+            target_name,
+            pipeline=pipeline,
+            n_frames=n_frames,
+            out_path=out_path,
+        )
+        return str(result) if result else None
+
+    @mcp.tool(
+        name="classify_target",
+        description=(
+            "Look up how Mira will treat a target before any slew or capture: "
+            "what category it falls into (moon / planet / cluster / nebula / "
+            "galaxy / star / default), why, which capture pipeline gets picked, "
+            "and the starting (ISO, shutter) values the exposure tuner will use. "
+            "Use this whenever you want to explain the planned approach BEFORE "
+            "running goto, or to diagnose a wrong-pipeline complaint."
+        ),
+    )
+    def classify_target(target_name: str) -> dict:
+        return tool_layer.classify_target(target_name)
 
     @mcp.tool(
         name="orient",
@@ -374,6 +428,82 @@ def build_server() -> FastMCP:
     )
     def say_tool(text: str) -> bool:
         return tool_layer.say(text)
+
+    @mcp.tool(
+        name="compose_narration",
+        description=(
+            "Create a narrated audio piece (voice over a music bed, optionally "
+            "bracketed by intro/outro SFX) and save it to disk. Synthesizes "
+            "narration via ElevenLabs TTS, generates a matched-length music "
+            "bed via the ElevenLabs Music API, optionally generates bookend "
+            "SFX via the Sound Effects API, mixes everything into a single "
+            "mp3 under ~/mira/captures/narrations/, and returns the path. "
+            "Nothing is played. Voice auto-tunes its stability/style from "
+            "the script's audio tags; pass voice_settings to selectively "
+            "override. The narration voice defaults to George (warm "
+            "captivating storyteller). Audio tags ([warmly], [softly], "
+            "[whispers], [excited], [confidently]) work inline at sentence "
+            "starts. Pass intro_sfx_prompt and/or outro_sfx_prompt to add "
+            "cinematic open/close (a conch call, distant thunder, the "
+            "rustle of leaves); they crossfade into and out of the music "
+            "bed. The ElevenLabs Music API rejects prompts that name "
+            "copyrighted works; the resulting error includes a sanitized "
+            "rewrite to retry with. Requires ffmpeg and ELEVENLABS_API_KEY."
+        ),
+    )
+    def compose_narration_tool(
+        story_text: str,
+        music_prompt: str,
+        voice_id: Optional[str] = None,
+        voice_settings: Optional[dict] = None,
+        music_volume: float = 0.35,
+        intro_sfx_prompt: Optional[str] = None,
+        outro_sfx_prompt: Optional[str] = None,
+        intro_sfx_duration_s: Optional[float] = 6.0,
+        outro_sfx_duration_s: Optional[float] = 8.0,
+        output_path: Optional[str] = None,
+    ) -> dict:
+        return tool_layer.compose_narration(
+            story_text=story_text,
+            music_prompt=music_prompt,
+            voice_id=voice_id,
+            voice_settings=voice_settings,
+            music_volume=music_volume,
+            intro_sfx_prompt=intro_sfx_prompt,
+            outro_sfx_prompt=outro_sfx_prompt,
+            intro_sfx_duration_s=intro_sfx_duration_s,
+            outro_sfx_duration_s=outro_sfx_duration_s,
+            output_path=output_path,
+        )
+
+    @mcp.tool(
+        name="generate_sfx",
+        description=(
+            "Generate a sound effect from a text prompt and save it as mp3 "
+            "under ~/mira/captures/sfx/. Returns the path. Nothing is "
+            "played. Use for stingers between tour segments, atmospheric "
+            "beds, or one-shot sounds (a conch shell call, distant "
+            "thunder, an owl hoot, the rustle of canoe ropes, the whir of "
+            "a telescope motor). Sensory prompts work best ('a single "
+            "deep conch shell call across open water with reverb tail' "
+            "beats 'conch'). duration_seconds is optional; when omitted "
+            "the model picks. prompt_influence in [0, 1] controls how "
+            "strictly the model follows the prompt. Requires "
+            "ELEVENLABS_API_KEY."
+        ),
+    )
+    def generate_sfx_tool(
+        prompt: str,
+        duration_seconds: Optional[float] = None,
+        prompt_influence: float = 0.3,
+        output_path: Optional[str] = None,
+    ) -> dict:
+        return tool_layer.generate_sfx(
+            prompt=prompt,
+            duration_seconds=duration_seconds,
+            prompt_influence=prompt_influence,
+            output_path=output_path,
+        )
 
     @mcp.tool(
         name="list_known_targets",

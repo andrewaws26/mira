@@ -1704,6 +1704,39 @@ def orient(*, ctx: ToolContext | None = None, drive_seconds: float = 12.0) -> bo
     return True
 
 
+def classify_target(target_name: str, *, ctx: ToolContext | None = None) -> dict:
+    """Tell the caller what category Mira will treat this target as.
+
+    Same logic goto() / smart_capture() use to pick the capture pipeline.
+    Useful for letting an LLM explain the planned approach BEFORE executing
+    a slew, or for diagnosing a "wrong pipeline" complaint.
+
+    Returns: {
+        "name":      original target name
+        "category":  "moon" | "planet" | "cluster" | "nebula" | "galaxy" | "star" | "default"
+        "reason":    human-readable explanation of the classification
+        "pipeline":  default capture pipeline for this category
+        "preset":    starting (iso, duration_ms, target_mean_lum, ...) for the tuner
+    }
+    """
+    _ = _ctx(ctx)  # validates context is buildable
+    category, reason = classify_with_confidence(target_name)
+    preset = EXPOSURE_PRESETS.get(category, EXPOSURE_PRESETS["default"])
+    return {
+        "name": target_name,
+        "category": category,
+        "reason": reason,
+        "pipeline": _default_pipeline_for(category),
+        "preset": {
+            "iso": preset.iso,
+            "duration_ms": preset.duration_ms,
+            "target_mean_lum": preset.target_mean_lum,
+            "max_iso": preset.max_iso,
+            "max_duration_ms": preset.max_duration_ms,
+        },
+    }
+
+
 def smart_capture(
     target_name: str,
     *,
@@ -1950,6 +1983,8 @@ TOOLS = (
     wait_for_slew_complete,
     get_observer_location,
     goto,
+    smart_capture,
+    classify_target,
     orient,
     say,
     compose_narration,

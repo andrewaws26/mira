@@ -19,9 +19,13 @@ from .ephemeris import NameNotFoundError
 from .mount import MountError
 from .solver import SolveFailed, SolverError
 from .speech import SpeechError
+from .narration import CompositionError
+from .sfx import SfxError
 from .tools import (
     ToolContext,
     capture_frame,
+    compose_narration,
+    generate_sfx,
     get_mount_position,
     get_target_coordinates,
     goto,
@@ -61,14 +65,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_goto = sub.add_parser(
         "goto",
-        help="solve current pointing, sync, then slew to a named target",
+        help="solve current pointing, sync, slew, and smart-capture",
         description=(
             "Capture a frame, plate-solve to learn the true current pointing, "
-            "sync the mount, then slew to the named target. This is the "
-            "headline operation. No prior star alignment is needed."
+            "sync the mount, slew to the named target, and (when the iPhone "
+            "bridge is the camera backend) run the target-aware smart capture "
+            "pipeline: target-tuned ISO + shutter, then lucky-imaging burst "
+            "for planets, live-stack for deep-sky, stretch+sharpen for the "
+            "Moon, or a single tuned frame for stars."
         ),
     )
     p_goto.add_argument("target", help="object name (e.g. Jupiter, M31, Vega)")
+    p_goto.add_argument(
+        "--no-capture",
+        action="store_true",
+        help="skip the smart-capture step; just slew",
+    )
+    p_goto.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="path to write the final image to",
+    )
 
     p_sync = sub.add_parser(
         "sync",
@@ -92,10 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_capture = sub.add_parser(
         "capture",
-        help="capture a single frame from the iPhone and save to disk",
+        help="capture one frame, or run the smart-capture pipeline",
         description=(
-            "Capture one frame via Continuity Camera. Writes to the "
-            "configured capture directory and prints the path."
+            "Without --target: capture one frame from the configured camera "
+            "backend (imagesnap or iPhone bridge) and save it to disk. "
+            "With --target X: run the target-aware smart-capture pipeline "
+            "(auto-tune ISO + shutter, lucky-image / live-stack / moon "
+            "process / single capture based on target type). No mount slew."
         ),
     )
     p_capture.add_argument(
@@ -103,6 +124,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="optional output path. Default: timestamped name in capture_dir.",
+    )
+    p_capture.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help=(
+            "if set, run smart-capture for this target type (e.g. 'Moon', "
+            "'Jupiter', 'M42'). Auto-tunes exposure and picks the right "
+            "capture pipeline."
+        ),
+    )
+    p_capture.add_argument(
+        "--pipeline",
+        type=str,
+        choices=["lucky", "live", "moon", "single"],
+        default=None,
+        help="force a specific pipeline regardless of target type",
+    )
+    p_capture.add_argument(
+        "--n-frames",
+        type=int,
+        default=None,
+        help="frame count for lucky/live pipelines (default 30)",
     )
 
     p_solve = sub.add_parser(
@@ -257,6 +301,110 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p_compose = sub.add_parser(
+        "compose",
+        help="create a narrated audio piece (voice over a music bed) and save it",
+        description=(
+            "Synthesize narration via ElevenLabs TTS, generate a matched-length "
+            "music bed via the ElevenLabs Music API, mix them into one mp3, and "
+            "save it under ~/mira/captures/narrations/. Nothing is played. "
+            "Requires ffmpeg and ELEVENLABS_API_KEY. Audio tags inside the "
+            "story text ([warmly], [softly], [whispers], [excited], "
+            "[confidently]) color delivery."
+        ),
+    )
+    p_compose.add_argument(
+        "story_file",
+        type=Path,
+        help="path to a UTF-8 text file containing the narration",
+    )
+    p_compose.add_argument(
+        "--music",
+        type=str,
+        required=True,
+        help="prompt describing the music bed (instruments, tempo, mood)",
+    )
+    p_compose.add_argument(
+        "--voice",
+        type=str,
+        default=None,
+        help=(
+            "ElevenLabs voice id. Defaults to George (warm storyteller). "
+            "Must be a voice that supports eleven_v3."
+        ),
+    )
+    p_compose.add_argument(
+        "--music-volume",
+        type=float,
+        default=0.35,
+        help="music bed volume relative to narration (0.0 to 1.0, default 0.35)",
+    )
+    p_compose.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="output path. Defaults to a timestamped name in ~/mira/captures/narrations/.",
+    )
+    p_compose.add_argument(
+        "--stability", type=float, default=None,
+        help="override voice stability (0..1, lower = more emotional swing)",
+    )
+    p_compose.add_argument(
+        "--style", type=float, default=None,
+        help="override voice style (0..1, higher = more emphasis)",
+    )
+    p_compose.add_argument(
+        "--intro-sfx", type=str, default=None,
+        help="optional SFX prompt for the cinematic open (crossfades into music)",
+    )
+    p_compose.add_argument(
+        "--outro-sfx", type=str, default=None,
+        help="optional SFX prompt for the cinematic close (crossfades from music tail)",
+    )
+    p_compose.add_argument(
+        "--intro-sfx-duration", type=float, default=6.0,
+        help="intro SFX length in seconds (0.5..22). Default 6.0.",
+    )
+    p_compose.add_argument(
+        "--outro-sfx-duration", type=float, default=8.0,
+        help="outro SFX length in seconds (0.5..22). Default 8.0.",
+    )
+
+    p_sfx = sub.add_parser(
+        "sfx",
+        help="generate a sound effect from a text prompt and save as mp3",
+        description=(
+            "Synthesize a one-shot sound effect via the ElevenLabs Sound "
+            "Effects API and save it under ~/mira/captures/sfx/. Useful "
+            "for stingers, atmospheric beds, conch calls, owl hoots, "
+            "thunder, rope creaks. Nothing is played. Requires "
+            "ELEVENLABS_API_KEY."
+        ),
+    )
+    p_sfx.add_argument(
+        "prompt",
+        nargs="+",
+        help="text describing the sound (joined with spaces)",
+    )
+    p_sfx.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="length in seconds, in [0.5, 22]. Default: model decides.",
+    )
+    p_sfx.add_argument(
+        "--influence",
+        type=float,
+        default=0.3,
+        help="prompt_influence in [0, 1]. Higher follows the prompt more strictly.",
+    )
+    p_sfx.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="output path. Defaults to a timestamped name in ~/mira/captures/sfx/.",
+    )
+
     p_preview = sub.add_parser(
         "preview",
         help="open a live preview window of the iPhone feed",
@@ -287,8 +435,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="window size as WIDTHxHEIGHT (e.g. 1280x720)",
     )
 
+    p_fly = sub.add_parser(
+        "fly",
+        help="preview + global jog keys (arrows control mount while ffplay focused)",
+        description=(
+            "Opens the ffplay preview AND a global keyboard listener so "
+            "arrow keys / 1-9 / q control the mount regardless of focus. "
+            "Requires macOS Accessibility permission (granted via System "
+            "Settings -> Privacy & Security -> Accessibility). Footgun: "
+            "the listener is GLOBAL while running, so arrows pressed in "
+            "any other app will also move the mount. Press q anywhere "
+            "to quit cleanly."
+        ),
+    )
+
     # Make sure type checkers know these locals stay used.
-    _ = (p_goto, p_sync, p_where, p_capture, p_solve, p_status, p_devices, p_resolve)
+    _ = (p_goto, p_sync, p_where, p_capture, p_solve, p_status, p_devices, p_resolve, p_fly)
 
     return parser
 
@@ -325,7 +487,12 @@ def _build_context(args: argparse.Namespace) -> ToolContext:
 def cmd_goto(args: argparse.Namespace) -> int:
     ctx = _build_context(args)
     try:
-        ok = goto(args.target, ctx=ctx)
+        ok = goto(
+            args.target,
+            auto_capture=not args.no_capture,
+            capture_out=args.out,
+            ctx=ctx,
+        )
         if not ok:
             print(f"goto {args.target}: failed. Check ~/mira/mira.log for details.")
             return EXIT_FAILURE
@@ -375,6 +542,25 @@ def cmd_where(args: argparse.Namespace) -> int:
 def cmd_capture(args: argparse.Namespace) -> int:
     ctx = _build_context(args)
     try:
+        # Smart-capture mode: --target invokes the auto-tune + pipeline
+        # routing. Useful for indoor testing (no mount slew) and for
+        # re-capturing the current pointing with a target-tuned exposure.
+        if args.target:
+            from .tools import smart_capture
+            final = smart_capture(
+                args.target,
+                ctx=ctx,
+                pipeline=args.pipeline,
+                n_frames=args.n_frames,
+                out_path=args.output,
+            )
+            if final is None:
+                print(f"smart_capture {args.target}: failed.")
+                return EXIT_FAILURE
+            print(final)
+            return EXIT_OK
+
+        # Legacy single-frame capture
         path = capture_frame(ctx=ctx)
         if args.output is not None:
             target = Path(args.output).expanduser()
@@ -710,6 +896,78 @@ def cmd_jog(args: argparse.Namespace) -> int:
     return run_jog(cfg)
 
 
+def cmd_compose(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+
+    story_path = args.story_file.expanduser()
+    if not story_path.exists():
+        return _exit_with_clean_error(f"story file not found: {story_path}", code=EXIT_USAGE)
+    story_text = story_path.read_text(encoding="utf-8").strip()
+    if not story_text:
+        return _exit_with_clean_error(f"story file is empty: {story_path}", code=EXIT_USAGE)
+
+    overrides: dict = {}
+    if args.stability is not None:
+        overrides["stability"] = args.stability
+    if args.style is not None:
+        overrides["style"] = args.style
+
+    try:
+        result = compose_narration(
+            story_text=story_text,
+            music_prompt=args.music,
+            voice_id=args.voice,
+            voice_settings=overrides or None,
+            music_volume=args.music_volume,
+            intro_sfx_prompt=args.intro_sfx,
+            outro_sfx_prompt=args.outro_sfx,
+            intro_sfx_duration_s=args.intro_sfx_duration,
+            outro_sfx_duration_s=args.outro_sfx_duration,
+            output_path=args.output,
+        )
+    except CompositionError as e:
+        return _exit_with_clean_error(str(e))
+
+    print(f"saved: {result['output_path']}")
+    print(
+        f"voice {result['voice_duration_s']:.1f}s, "
+        f"music {result['music_duration_s']:.1f}s, voice_id {result['voice_id']}"
+    )
+    if result.get("intro_sfx_duration_s"):
+        print(f"intro sfx {result['intro_sfx_duration_s']:.1f}s")
+    if result.get("outro_sfx_duration_s"):
+        print(f"outro sfx {result['outro_sfx_duration_s']:.1f}s")
+    return EXIT_OK
+
+
+def cmd_sfx(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+
+    prompt = " ".join(args.prompt)
+    try:
+        result = generate_sfx(
+            prompt=prompt,
+            duration_seconds=args.duration,
+            prompt_influence=args.influence,
+            output_path=args.output,
+        )
+    except SfxError as e:
+        return _exit_with_clean_error(str(e))
+
+    print(f"saved: {result['output_path']}")
+    if result["duration_seconds"] is not None:
+        print(f"duration {result['duration_seconds']}s, prompt_influence {result['prompt_influence']}")
+    else:
+        print(f"duration auto, prompt_influence {result['prompt_influence']}")
+    return EXIT_OK
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     if args.verbose:
@@ -723,10 +981,20 @@ def cmd_preview(args: argparse.Namespace) -> int:
             device_name=device,
             framerate=args.framerate,
             window_size=args.size,
+            flip_180=cfg.camera.flip_180,
         )
     except PreviewError as e:
         return _exit_with_clean_error(str(e))
     return rc
+
+
+def cmd_fly(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    if args.verbose:
+        cfg.logging.level = "DEBUG"
+    setup_logging(cfg)
+    from .fly import run_fly
+    return run_fly(cfg)
 
 
 COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
@@ -739,9 +1007,12 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "devices":  cmd_devices,
     "resolve":  cmd_resolve,
     "preview":  cmd_preview,
+    "compose":  cmd_compose,
+    "sfx":      cmd_sfx,
     "say":      cmd_say,
     "voices":   cmd_voices,
     "jog":      cmd_jog,
+    "fly":      cmd_fly,
     "gps-push": cmd_gps_push,
     "up":       cmd_up,
     "down":     cmd_down,
@@ -777,6 +1048,10 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
     except SolveFailed as e:
         return _exit_with_clean_error(f"plate solve failed: {e}")
     except SolverError as e:
+        return _exit_with_clean_error(str(e))
+    except CompositionError as e:
+        return _exit_with_clean_error(str(e))
+    except SfxError as e:
         return _exit_with_clean_error(str(e))
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
