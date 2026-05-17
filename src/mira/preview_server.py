@@ -22,299 +22,24 @@ sensor feed alongside Mira's most-recent processed frame.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import socket
+import traceback
 import urllib.error
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
-from .pipeline_state import state_dir
+from .pipeline_state import state_dir, read_state
 
 logger = logging.getLogger(__name__)
 
-
-# ----------------------------------------------------------------------
-# HTML page (self-contained: no external deps, no JS framework)
-# ----------------------------------------------------------------------
-
-_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mira live</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: #000; color: #ff3b30; font-family: Menlo, monospace;
-    min-height: 100vh; display: flex; flex-direction: column;
-  }
-  header {
-    padding: 12px 18px; border-bottom: 1px solid #5a1410;
-    display: flex; align-items: baseline; gap: 18px;
-  }
-  h1 { font-size: 18px; font-weight: 700; }
-  .sub { color: #a02520; font-size: 11px; }
-  .spacer { flex: 1; }
-  .pill {
-    border: 1px solid #5a1410; padding: 2px 8px; border-radius: 4px;
-    font-size: 11px; color: #ff3b30;
-  }
-  .pill.live { color: #ff8080; border-color: #ff8080; animation: pulse 1.5s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
-
-  main {
-    flex: 1; display: grid; grid-template-columns: 1fr 280px;
-    gap: 0; min-height: 0;
-  }
-  .imgcol {
-    background: #000; display: flex; justify-content: center;
-    align-items: center; padding: 12px; min-height: 0; overflow: hidden;
-  }
-  .imgcol img {
-    max-width: 100%; max-height: 100%; object-fit: contain;
-    border: 1px solid #5a1410;
-  }
-  .imgcol.empty {
-    color: #5a1410; font-style: italic; font-size: 12px;
-  }
-  aside {
-    border-left: 1px solid #5a1410; padding: 14px 18px;
-    display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
-  }
-  .row { display: flex; justify-content: space-between; font-size: 12px; }
-  .row .k { color: #a02520; }
-  .row .v { color: #ff3b30; }
-  .progress {
-    height: 8px; background: #1a0808; border: 1px solid #5a1410; border-radius: 2px;
-    overflow: hidden;
-  }
-  .progress .bar { height: 100%; background: #ff3b30; transition: width .3s; }
-  .section { margin-top: 8px; color: #a02520; font-size: 10px; letter-spacing: 1px; }
-  .msg { color: #ff3b30; font-size: 12px; line-height: 1.4; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 6px; }
-  .tab {
-    border: 1px solid #5a1410; padding: 4px 10px; cursor: pointer;
-    font-size: 10px; color: #a02520; user-select: none;
-  }
-  .tab.active { color: #ff3b30; border-color: #ff3b30; }
-  @media (max-width: 700px) {
-    main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
-    aside { border-left: none; border-top: 1px solid #5a1410; }
-  }
-</style>
-</head>
-<body>
-<header>
-  <h1>MIRA</h1>
-  <span class="sub">live preview</span>
-  <span class="spacer"></span>
-  <span id="conn" class="pill">waiting</span>
-</header>
-
-<main>
-  <div class="imgcol" id="imgcol">
-    <img id="frame" alt="">
-  </div>
-
-  <aside>
-    <div class="tabs">
-      <span class="tab active" data-src="stack">stack</span>
-      <span class="tab" data-src="frame">last frame</span>
-      <span class="tab" data-src="live">iphone live</span>
-    </div>
-
-    <div class="section" id="jog-section" style="display:none">JOG</div>
-    <div id="jog-panel" style="display:none">
-      <div class="row"><span class="k">arrows</span> <span class="v">N S E W</span></div>
-      <div class="row"><span class="k">rate</span> <span class="v" id="rate">5</span> <span class="k">(1-9 keys)</span></div>
-      <div class="row"><span class="k">status</span> <span class="v" id="jog-status">idle</span></div>
-      <div class="msg" style="margin-top:4px">click frame area + hold arrow to move.<br>release to stop. Q to release all.</div>
-    </div>
-
-    <div class="section">TARGET</div>
-    <div class="row"><span class="k">name</span> <span class="v" id="target">-</span></div>
-    <div class="row"><span class="k">category</span> <span class="v" id="category">-</span></div>
-    <div class="row"><span class="k">pipeline</span> <span class="v" id="pipeline">-</span></div>
-
-    <div class="section">PHASE</div>
-    <div class="row"><span class="k">state</span> <span class="v" id="phase">idle</span></div>
-    <div class="msg" id="message"></div>
-
-    <div class="section">EXPOSURE</div>
-    <div class="row"><span class="k">ISO</span> <span class="v" id="iso">-</span></div>
-    <div class="row"><span class="k">shutter</span> <span class="v" id="shutter">-</span></div>
-    <div class="row"><span class="k">bias</span> <span class="v" id="bias">-</span></div>
-    <div class="row"><span class="k">mean lum</span> <span class="v" id="meanlum">-</span></div>
-
-    <div class="section">PROGRESS</div>
-    <div class="row"><span class="k">captured</span> <span class="v" id="captured">0 / 0</span></div>
-    <div class="row"><span class="k">stacked</span> <span class="v" id="stacked">0</span></div>
-    <div class="progress"><div class="bar" id="bar" style="width:0%"></div></div>
-
-    <div class="section">OUTPUT</div>
-    <div class="msg" id="output" style="word-break:break-all">-</div>
-    <div class="row"><span class="k">updated</span> <span class="v" id="updated">-</span></div>
-  </aside>
-</main>
-
-<script>
-let imgSrc = "stack";   // "stack" | "frame" | "live"
-let imgEl = document.getElementById("frame");
-let connEl = document.getElementById("conn");
-
-document.querySelectorAll(".tab").forEach(t => {
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-    t.classList.add("active");
-    imgSrc = t.dataset.src;
-    refreshImage();
-  });
-});
-
-function refreshImage() {
-  // Cache-bust with epoch ms so the browser always reloads
-  const url = "/" + imgSrc + ".jpg?t=" + Date.now();
-  // Use a hidden image to preload, only swap on success
-  const probe = new Image();
-  probe.onload = () => {
-    imgEl.src = url;
-    imgEl.style.display = "block";
-    document.getElementById("imgcol").classList.remove("empty");
-  };
-  probe.onerror = () => {
-    if (imgSrc === "stack") {
-      imgEl.style.display = "none";
-      document.getElementById("imgcol").classList.add("empty");
-    }
-  };
-  probe.src = url;
-}
-
-function fmt(v, dp=2) {
-  if (v === null || v === undefined) return "-";
-  if (typeof v === "number") return v.toFixed(dp);
-  return v;
-}
-function fmtShutter(ms) {
-  if (ms === null || ms === undefined) return "-";
-  if (ms >= 500) return (ms / 1000).toFixed(2) + "s";
-  if (ms >= 1) return ms.toFixed(1) + "ms";
-  return ms.toFixed(3) + "ms";
-}
-
-async function refreshState() {
-  try {
-    const r = await fetch("/state.json", { cache: "no-store" });
-    if (!r.ok) throw new Error("bad status " + r.status);
-    const s = await r.json();
-    connEl.textContent = "live";
-    connEl.classList.add("live");
-
-    document.getElementById("target").textContent = s.target || "-";
-    document.getElementById("category").textContent = s.category || "-";
-    document.getElementById("pipeline").textContent = s.pipeline || "-";
-    document.getElementById("phase").textContent = s.phase || "idle";
-    document.getElementById("message").textContent = s.message || "";
-    document.getElementById("iso").textContent = s.iso == null ? "-" : Math.round(s.iso);
-    document.getElementById("shutter").textContent = fmtShutter(s.shutter_ms);
-    document.getElementById("bias").textContent = s.bias == null ? "-" : fmt(s.bias, 2) + " EV";
-    document.getElementById("meanlum").textContent = s.mean_lum == null ? "-" : fmt(s.mean_lum, 1);
-    document.getElementById("captured").textContent =
-      (s.frames_captured || 0) + " / " + (s.frames_target || 0);
-    document.getElementById("stacked").textContent = s.frames_stacked || 0;
-    document.getElementById("output").textContent = s.output_path || "-";
-    document.getElementById("updated").textContent = s.updated_at || "-";
-
-    const pct = (s.frames_target > 0)
-      ? Math.min(100, 100 * (s.frames_captured || 0) / s.frames_target)
-      : 0;
-    document.getElementById("bar").style.width = pct + "%";
-  } catch (e) {
-    connEl.textContent = "no state";
-    connEl.classList.remove("live");
-  }
-}
-
-setInterval(refreshState, 700);
-setInterval(refreshImage, 500);
-refreshState();
-refreshImage();
-
-// --- Mount jog controls (only active if /jog/info reports enabled) ---
-let jogEnabled = false;
-const heldKeys = new Set();
-const KEY_DIR = {
-  ArrowUp: "north",  ArrowDown: "south",
-  ArrowLeft: "east", ArrowRight: "west",
-};
-
-async function jogInit() {
-  try {
-    const r = await fetch("/jog/info");
-    if (!r.ok) return;
-    const info = await r.json();
-    if (info.enabled) {
-      jogEnabled = true;
-      document.getElementById("jog-section").style.display = "";
-      document.getElementById("jog-panel").style.display = "";
-    }
-  } catch (e) {}
-}
-
-async function jogPost(path, body) {
-  try {
-    await fetch(path, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body),
-    });
-  } catch (e) {}
-}
-
-window.addEventListener("keydown", (e) => {
-  if (!jogEnabled) return;
-  if (e.repeat) return;
-  // Rate keys 1..9
-  if (e.key >= "1" && e.key <= "9") {
-    const r = parseInt(e.key);
-    document.getElementById("rate").textContent = r;
-    jogPost("/jog/rate", {rate: r});
-    return;
-  }
-  if (e.key === "q" || e.key === "Q") {
-    jogPost("/jog/stop-all", {});
-    heldKeys.clear();
-    document.getElementById("jog-status").textContent = "all stop";
-    return;
-  }
-  const dir = KEY_DIR[e.key];
-  if (!dir) return;
-  e.preventDefault();
-  if (heldKeys.has(e.key)) return;
-  heldKeys.add(e.key);
-  jogPost("/jog", {direction: dir, action: "start"});
-  document.getElementById("jog-status").textContent = "moving " + dir;
-});
-
-window.addEventListener("keyup", (e) => {
-  if (!jogEnabled) return;
-  const dir = KEY_DIR[e.key];
-  if (!dir) return;
-  e.preventDefault();
-  heldKeys.delete(e.key);
-  jogPost("/jog", {direction: dir, action: "stop"});
-  document.getElementById("jog-status").textContent = heldKeys.size ? "moving" : "idle";
-});
-
-jogInit();
-</script>
-</body>
-</html>
-"""
+UI_DIR = Path(__file__).parent / "ui"
+INDEX_HTML_PATH = UI_DIR / "index.html"
 
 
 # ----------------------------------------------------------------------
@@ -333,9 +58,13 @@ class _PreviewHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/":
-            self._send_html(_HTML)
+            self._send_index()
         elif path == "/state.json":
             self._send_state()
+        elif path == "/status.json":
+            self._handle_status()
+        elif path == "/tools":
+            self._handle_tools_list()
         elif path == "/frame.jpg":
             self._send_file(state_dir() / "frame.jpg", "image/jpeg")
         elif path == "/stack.jpg":
@@ -355,8 +84,28 @@ class _PreviewHandler(BaseHTTPRequestHandler):
             self._handle_jog_rate()
         elif path == "/jog/stop-all":
             self._handle_jog_stop_all()
+        elif path == "/run-tool":
+            self._handle_run_tool()
+        elif path == "/align/up":
+            self._handle_align("up")
+        elif path == "/align/down":
+            self._handle_align("down")
+        elif path == "/align/orient":
+            self._handle_align("orient")
+        elif path == "/align/center-ready":
+            self._handle_align("center-ready")
+        elif path == "/align/sync":
+            self._handle_align("sync")
         else:
             self.send_error(404)
+
+    def _send_index(self) -> None:
+        # Read on every request so iteration doesn't require restart.
+        try:
+            html = INDEX_HTML_PATH.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            html = "<html><body>UI template missing</body></html>"
+        self._send_html(html)
 
     def _read_json(self) -> dict:
         try:
@@ -469,6 +218,210 @@ class _PreviewHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # ------------------------------------------------------------------
+    # /status.json  - overall mount/camera/observer/pipeline health
+    # ------------------------------------------------------------------
+    def _handle_status(self) -> None:
+        status: dict[str, Any] = {
+            "version": "0.4.0",
+            "jog_enabled": self.mount_ctx is not None,
+            "mount": {"connected": False, "ra_deg": None, "dec_deg": None, "slewing": False},
+            "camera": {"source": None, "reachable": False, "last_capture": None},
+            "observer": None,
+            "captures_total": None,
+        }
+
+        if self.mount_ctx is not None:
+            cfg = self.mount_ctx.config
+            mount = self.mount_ctx.mount
+            try:
+                status["mount"]["connected"] = mount.is_connected()
+            except Exception:
+                pass
+            if status["mount"]["connected"]:
+                try:
+                    ra, dec = mount.get_position(timeout=1.5)
+                    status["mount"]["ra_deg"] = ra
+                    status["mount"]["dec_deg"] = dec
+                except Exception:
+                    pass
+                try:
+                    status["mount"]["slewing"] = mount.is_slewing()
+                except Exception:
+                    pass
+
+            status["camera"]["source"] = cfg.camera.source
+            status["camera"]["reachable"] = _camera_reachable(cfg)
+            try:
+                status["observer"] = {
+                    "latitude_deg": cfg.observer.latitude,
+                    "longitude_deg": cfg.observer.longitude,
+                    "utc_offset_hours": _local_utc_offset_hours(),
+                }
+            except Exception:
+                pass
+
+        # Pipeline summary from the state file (works without mount)
+        pstate = read_state()
+        if pstate is not None:
+            status["pipeline_phase"] = pstate.phase
+            status["pipeline_target"] = pstate.target
+
+        self._send_json(status)
+
+    # ------------------------------------------------------------------
+    # /tools  - list available MCP tools with descriptions
+    # ------------------------------------------------------------------
+    def _handle_tools_list(self) -> None:
+        from . import tools as tool_layer
+        out = []
+        for fn in tool_layer.TOOLS:
+            sig = inspect.signature(fn)
+            params = [p for p in sig.parameters.values() if p.name != "ctx"]
+            first_param = params[0].name if params else None
+            doc = (fn.__doc__ or "").strip().split("\n", 1)[0]
+            out.append({
+                "name": fn.__name__,
+                "description": doc,
+                "first_param": first_param,
+                "params": [
+                    {"name": p.name, "default": (None if p.default is inspect.Parameter.empty else _safe_default(p.default))}
+                    for p in params
+                ],
+            })
+        self._send_json(out)  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------
+    # /run-tool  - invoke a tool by name with args
+    # ------------------------------------------------------------------
+    def _handle_run_tool(self) -> None:
+        if self.mount_ctx is None:
+            self.send_error(503, "tool invocation requires a ToolContext (mira watch always provides one; this should not happen)")
+            return
+        body = self._read_json()
+        tool_name = body.get("tool")
+        args = body.get("args") or {}
+        if not isinstance(tool_name, str):
+            self.send_error(400, "expected {tool: str, args: object}")
+            return
+        from . import tools as tool_layer
+        fn = next((t for t in tool_layer.TOOLS if t.__name__ == tool_name), None)
+        if fn is None:
+            self._send_json({"error": f"unknown tool: {tool_name}"})
+            return
+        try:
+            result = fn(**args, ctx=self.mount_ctx)
+            self._send_json({"result": _jsonable(result)})
+        except TypeError as e:
+            self._send_json({"error": f"bad arguments: {e}"})
+        except Exception as e:
+            logger.exception("run-tool %s failed", tool_name)
+            self._send_json({
+                "error": f"{type(e).__name__}: {e}",
+                "trace": traceback.format_exc().splitlines()[-6:],
+            })
+
+    # ------------------------------------------------------------------
+    # /align/*  - step-by-step alignment wizard
+    # ------------------------------------------------------------------
+    def _handle_align(self, step: str) -> None:
+        if self.mount_ctx is None:
+            self._send_json({
+                "ok": False,
+                "troubleshoot": "watch must be started with --jog to drive the mount.",
+            })
+            return
+
+        c = self.mount_ctx
+        try:
+            if step == "up":
+                from . import tools as tool_layer
+                result = tool_layer.wake_up(ctx=c)
+                if result.get("indi_listening"):
+                    self._send_json({"ok": True, "message": "indiserver listening on :7624"})
+                else:
+                    self._send_json({
+                        "ok": False,
+                        "troubleshoot": (
+                            "indiserver did not start. Common causes: "
+                            "(1) mount unplugged from FTDI cable, "
+                            "(2) wrong mount.port in config.yaml (must be cu.* not tty.*), "
+                            "(3) another mira process already holds the connection."
+                        ),
+                    })
+                return
+
+            if step == "down":
+                from . import tools as tool_layer
+                tool_layer.shut_down(ctx=c)
+                self._send_json({"ok": True, "message": "indiserver stopped"})
+                return
+
+            if step == "orient":
+                from . import tools as tool_layer
+                ok = tool_layer.orient(ctx=c)
+                if ok:
+                    self._send_json({"ok": True, "message": "drove ~12s north toward Polaris"})
+                else:
+                    self._send_json({
+                        "ok": False,
+                        "troubleshoot": (
+                            "Motion switch refused. Check that indiserver is up and the mount is connected. "
+                            "Try cycling: stop -> start."
+                        ),
+                    })
+                return
+
+            if step == "center-ready":
+                # No-op on the server; just acknowledges so the wizard advances.
+                self._send_json({"ok": True, "message": "ready to plate-solve"})
+                return
+
+            if step == "sync":
+                from . import tools as tool_layer
+                # capture, solve, sync
+                try:
+                    img = tool_layer.capture_frame(ctx=c)
+                except Exception as e:
+                    self._send_json({
+                        "ok": False,
+                        "troubleshoot": f"capture failed: {e}. Is the camera backend up? (Check Status panel.)",
+                    })
+                    return
+                ra_hint, dec_hint = None, None
+                try:
+                    ra_hint, dec_hint = c.mount.get_position()
+                except Exception:
+                    pass
+                solved = tool_layer.plate_solve(img, ra_hint_deg=ra_hint, dec_hint_deg=dec_hint, ctx=c)
+                if solved is None:
+                    self._send_json({
+                        "ok": False,
+                        "troubleshoot": (
+                            "Plate solve failed. Common causes: "
+                            "(1) not enough stars in the frame (point higher / longer exposure), "
+                            "(2) iPhone not centered over the eyepiece, "
+                            "(3) wrong ASTAP star database for this FOV. "
+                            f"Frame at: {img}"
+                        ),
+                    })
+                    return
+                ra, dec = solved
+                sync_ok = tool_layer.sync_mount(ra, dec, ctx=c)
+                if not sync_ok:
+                    self._send_json({
+                        "ok": False,
+                        "troubleshoot": "Mount rejected sync. Try restarting indiserver (stop / start).",
+                    })
+                    return
+                self._send_json({"ok": True, "message": f"synced at RA={ra:.3f}° Dec={dec:.3f}°"})
+                return
+
+            self.send_error(404, f"unknown align step: {step}")
+        except Exception as e:
+            logger.exception("align step %s failed", step)
+            self._send_json({"ok": False, "troubleshoot": f"unexpected error: {e}"})
+
     def _proxy_iphone_preview(self) -> None:
         url = self.iphone_url
         if not url:
@@ -525,6 +478,53 @@ def serve(
         print("\nstopping...")
     finally:
         server.server_close()
+
+
+def _camera_reachable(cfg) -> bool:
+    """Best-effort camera health check. Doesn't capture, just probes."""
+    try:
+        if cfg.camera.source == "iphone_bridge" and cfg.camera.iphone_url:
+            req = urllib.request.Request(f"{cfg.camera.iphone_url.rstrip('/')}/health")
+            with urllib.request.urlopen(req, timeout=1.5) as r:
+                return r.status == 200
+        # imagesnap path: assume reachable, no cheap health check
+        return True
+    except Exception:
+        return False
+
+
+def _jsonable(v: Any) -> Any:
+    """Coerce common tool return types into JSON-encodable values."""
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _jsonable(v) for k, v in v.items()}
+    if isinstance(v, Path):
+        return str(v)
+    if isinstance(v, datetime):
+        return v.isoformat()
+    # Dataclasses, anything with __dict__
+    try:
+        return str(v)
+    except Exception:
+        return repr(v)
+
+
+def _safe_default(v: Any) -> Any:
+    """Default values for tool params, made JSON-safe."""
+    try:
+        return _jsonable(v)
+    except Exception:
+        return None
+
+
+def _local_utc_offset_hours() -> float:
+    """Mirror tools._local_utc_offset_hours without importing the heavy module."""
+    now = datetime.now().astimezone()
+    off = now.utcoffset()
+    return 0.0 if off is None else off.total_seconds() / 3600.0
 
 
 def _jog_motion(mount, direction: str, start: bool) -> None:

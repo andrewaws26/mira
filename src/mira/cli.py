@@ -1023,23 +1023,23 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
     iphone_url = args.iphone_url or cfg.camera.iphone_url
 
-    mount_ctx = None
+    # Always build a ToolContext so the terminal, capture, and slew panels can
+    # invoke tools. Only eagerly connect the mount when --jog is set;
+    # otherwise let individual tool calls connect lazily as needed.
+    ctx = _build_context(args)
     if args.jog:
-        # Spin up a real ToolContext + connect to indiserver.
-        mount_ctx = _build_context(args)
         try:
-            mount_ctx.connect_mount(timeout=10.0)
+            ctx.connect_mount(timeout=10.0)
         except Exception as e:
-            mount_ctx.shutdown()
+            ctx.shutdown()
             return _exit_with_clean_error(
                 f"jog requested but mount connect failed: {e}. Is 'mira up' running?"
             )
 
     try:
-        serve(port=args.port, iphone_url=iphone_url, mount_ctx=mount_ctx)
+        serve(port=args.port, iphone_url=iphone_url, mount_ctx=ctx)
     finally:
-        if mount_ctx is not None:
-            mount_ctx.shutdown()
+        ctx.shutdown()
     return EXIT_OK
 
 

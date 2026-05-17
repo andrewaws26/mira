@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mira</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --red: #ff3b30;
+    --red-dim: #a02520;
+    --red-faint: #5a1410;
+    --bg: #000;
+    --bg2: #0a0303;
+    --warn: #ffaa55;
+    --err: #ff8080;
+  }
+  body {
+    background: var(--bg); color: var(--red); font-family: Menlo, Monaco, monospace;
+    height: 100vh; display: grid; overflow: hidden;
+    grid-template-columns: 160px 1fr;
+    grid-template-rows: 44px 1fr 24px;
+    grid-template-areas:
+      "header header"
+      "nav    main"
+      "status status";
+  }
+  header {
+    grid-area: header; padding: 0 16px; border-bottom: 1px solid var(--red-faint);
+    display: flex; align-items: center; gap: 14px;
+  }
+  h1 { font-size: 16px; letter-spacing: 2px; color: var(--red); }
+  .sub { color: var(--red-dim); font-size: 11px; }
+  .spacer { flex: 1; }
+  .pill {
+    border: 1px solid var(--red-faint); padding: 2px 8px; border-radius: 3px;
+    font-size: 10px; color: var(--red-dim);
+  }
+  .pill.ok { color: var(--red); border-color: var(--red); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.err { color: var(--err); border-color: var(--err); }
+
+  nav {
+    grid-area: nav; border-right: 1px solid var(--red-faint);
+    display: flex; flex-direction: column; padding: 8px 0;
+  }
+  nav button {
+    background: none; border: none; color: var(--red-dim);
+    padding: 10px 16px; text-align: left; font-family: inherit;
+    font-size: 12px; letter-spacing: 1px; cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  nav button:hover { color: var(--red); }
+  nav button.active { color: var(--red); border-left-color: var(--red); background: var(--bg2); }
+
+  main {
+    grid-area: main; overflow: auto; padding: 16px 20px;
+  }
+  .panel { display: none; height: 100%; flex-direction: column; gap: 12px; }
+  .panel.active { display: flex; }
+
+  footer.status {
+    grid-area: status; padding: 4px 16px; border-top: 1px solid var(--red-faint);
+    display: flex; gap: 16px; font-size: 10px; color: var(--red-dim);
+    align-items: center;
+  }
+  footer .right { margin-left: auto; }
+
+  /* ---- LIVE PANEL ---- */
+  .live-layout { display: grid; grid-template-columns: 1fr 260px; gap: 12px; height: 100%; }
+  .img-frame {
+    border: 1px solid var(--red-faint); background: #000;
+    display: flex; align-items: center; justify-content: center; min-height: 0;
+    overflow: hidden;
+  }
+  .img-frame img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .img-frame .placeholder { color: var(--red-faint); font-style: italic; font-size: 12px; }
+  .live-info { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 6px; }
+  .tab {
+    border: 1px solid var(--red-faint); padding: 4px 10px; cursor: pointer;
+    font-size: 10px; color: var(--red-dim); user-select: none;
+    background: var(--bg);
+  }
+  .tab.active { color: var(--red); border-color: var(--red); }
+  .section-label {
+    color: var(--red-dim); font-size: 9px; letter-spacing: 1.5px;
+    border-top: 1px solid var(--red-faint); padding-top: 8px; margin-top: 4px;
+  }
+  .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; }
+  .kv .k { color: var(--red-dim); }
+  .kv .v { color: var(--red); }
+  .progress {
+    height: 6px; background: #1a0808; border: 1px solid var(--red-faint); border-radius: 2px;
+    overflow: hidden; margin-top: 4px;
+  }
+  .progress .bar { height: 100%; background: var(--red); transition: width .3s; }
+  .msg { color: var(--red); font-size: 11px; line-height: 1.5; }
+
+  /* ---- ALIGN PANEL (wizard) ---- */
+  .wizard { max-width: 700px; }
+  .step {
+    border: 1px solid var(--red-faint); padding: 14px 16px; margin-bottom: 10px;
+    background: var(--bg2);
+  }
+  .step.active { border-color: var(--red); }
+  .step.done { border-color: var(--red-dim); opacity: 0.7; }
+  .step h3 { font-size: 13px; color: var(--red); margin-bottom: 6px; letter-spacing: 1px; }
+  .step h3 .step-num {
+    display: inline-block; width: 22px; height: 22px; line-height: 22px;
+    text-align: center; border: 1px solid var(--red-faint); border-radius: 50%;
+    margin-right: 8px; font-size: 11px; vertical-align: middle;
+  }
+  .step.done h3 .step-num { background: var(--red-dim); color: #000; border-color: var(--red-dim); }
+  .step.active h3 .step-num { background: var(--red); color: #000; border-color: var(--red); }
+  .step .body { font-size: 12px; color: var(--red-dim); line-height: 1.5; margin: 6px 0; padding-left: 30px; }
+  .step .actions { padding-left: 30px; margin-top: 8px; display: flex; gap: 8px; }
+  .step .status { padding-left: 30px; margin-top: 6px; font-size: 11px; color: var(--red); }
+  .step .status.err { color: var(--err); }
+  .step .trouble {
+    padding-left: 30px; margin-top: 6px; font-size: 11px; color: var(--warn);
+    background: rgba(255,170,85,0.05); padding: 8px 10px 8px 30px; border-left: 2px solid var(--warn);
+  }
+
+  button.primary, button.secondary, button.danger {
+    background: var(--bg); border: 1px solid var(--red); color: var(--red);
+    font-family: inherit; padding: 6px 14px; font-size: 11px; cursor: pointer;
+    letter-spacing: 1px;
+  }
+  button.primary:hover { background: var(--red); color: #000; }
+  button.secondary { border-color: var(--red-faint); color: var(--red-dim); }
+  button.secondary:hover { color: var(--red); border-color: var(--red); }
+  button.danger { border-color: var(--err); color: var(--err); }
+  button.danger:hover { background: var(--err); color: #000; }
+  button[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+  /* ---- CAPTURE PANEL ---- */
+  .capture-form { max-width: 700px; display: flex; flex-direction: column; gap: 12px; }
+  .form-row { display: flex; gap: 12px; align-items: center; }
+  .form-row label { width: 100px; font-size: 11px; color: var(--red-dim); letter-spacing: 1px; }
+  .form-row input, .form-row select {
+    background: var(--bg2); border: 1px solid var(--red-faint); color: var(--red);
+    padding: 6px 10px; font-family: inherit; font-size: 12px; flex: 1;
+  }
+  .form-row input:focus, .form-row select:focus { border-color: var(--red); outline: none; }
+  .classification {
+    border: 1px solid var(--red-faint); padding: 10px 12px; background: var(--bg2);
+    font-size: 11px; color: var(--red);
+  }
+  .classification .label { color: var(--red-dim); font-size: 10px; letter-spacing: 1px; }
+
+  /* ---- TERMINAL PANEL ---- */
+  .terminal { display: flex; flex-direction: column; height: 100%; gap: 10px; }
+  .term-out {
+    flex: 1; border: 1px solid var(--red-faint); padding: 10px; overflow-y: auto;
+    font-size: 11px; line-height: 1.5; min-height: 0; background: var(--bg2);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .term-out .cmd { color: var(--red); }
+  .term-out .ok { color: var(--red); }
+  .term-out .err { color: var(--err); }
+  .term-out .info { color: var(--red-dim); }
+  .term-in-wrap {
+    display: flex; gap: 8px; align-items: center; border: 1px solid var(--red);
+    padding: 6px 8px;
+  }
+  .term-in-prompt { color: var(--red); font-size: 12px; }
+  .term-in {
+    flex: 1; background: none; border: none; color: var(--red); font-family: inherit;
+    font-size: 12px; outline: none;
+  }
+
+  /* ---- STATUS PANEL ---- */
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .status-card {
+    border: 1px solid var(--red-faint); padding: 12px; background: var(--bg2);
+  }
+  .status-card h3 { font-size: 12px; color: var(--red); margin-bottom: 8px; letter-spacing: 1px; }
+
+  /* ---- SLEW PANEL ---- */
+  .slew-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* ---- responsive ---- */
+  @media (max-width: 700px) {
+    body {
+      grid-template-columns: 60px 1fr;
+    }
+    nav button { font-size: 0; padding: 12px 0; text-align: center; }
+    nav button::before { content: attr(data-icon); font-size: 16px; display: inline-block; }
+    .live-layout { grid-template-columns: 1fr; grid-template-rows: 50vh auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MIRA</h1>
+  <span class="sub" id="version">v0</span>
+  <span class="spacer"></span>
+  <span class="pill" id="pill-mount">mount ?</span>
+  <span class="pill" id="pill-cam">camera ?</span>
+  <span class="pill" id="pill-jog">jog ?</span>
+</header>
+
+<nav>
+  <button data-mode="live"     data-icon="\25A0" class="active">Live</button>
+  <button data-mode="align"    data-icon="\25A1">Align</button>
+  <button data-mode="capture"  data-icon="\25CB">Capture</button>
+  <button data-mode="slew"     data-icon="\25B6">Slew</button>
+  <button data-mode="terminal" data-icon=">">Terminal</button>
+  <button data-mode="status"   data-icon="\2731">Status</button>
+</nav>
+
+<main>
+
+  <!-- ========== LIVE ========== -->
+  <div class="panel active" data-mode="live">
+    <div class="live-layout">
+      <div class="img-frame" id="imgcol"><img id="frame" alt=""></div>
+      <div class="live-info">
+        <div class="tabs">
+          <span class="tab active" data-src="stack">stack</span>
+          <span class="tab" data-src="frame">last frame</span>
+          <span class="tab" data-src="live">iphone live</span>
+        </div>
+
+        <div class="section-label">TARGET</div>
+        <div class="kv"><span class="k">name</span><span class="v" id="kv-target">-</span></div>
+        <div class="kv"><span class="k">category</span><span class="v" id="kv-category">-</span></div>
+        <div class="kv"><span class="k">pipeline</span><span class="v" id="kv-pipeline">-</span></div>
+
+        <div class="section-label">PHASE</div>
+        <div class="kv"><span class="k">state</span><span class="v" id="kv-phase">idle</span></div>
+        <div class="msg" id="kv-message"></div>
+
+        <div class="section-label">EXPOSURE</div>
+        <div class="kv"><span class="k">ISO</span><span class="v" id="kv-iso">-</span></div>
+        <div class="kv"><span class="k">shutter</span><span class="v" id="kv-shutter">-</span></div>
+        <div class="kv"><span class="k">bias</span><span class="v" id="kv-bias">-</span></div>
+        <div class="kv"><span class="k">mean lum</span><span class="v" id="kv-mean">-</span></div>
+
+        <div class="section-label">PROGRESS</div>
+        <div class="kv"><span class="k">captured</span><span class="v" id="kv-captured">0 / 0</span></div>
+        <div class="kv"><span class="k">stacked</span><span class="v" id="kv-stacked">0</span></div>
+        <div class="progress"><div class="bar" id="bar" style="width:0%"></div></div>
+
+        <div class="section-label">OUTPUT</div>
+        <div class="msg" id="kv-output" style="word-break:break-all">-</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== ALIGN ========== -->
+  <div class="panel" data-mode="align">
+    <div class="wizard">
+      <p class="sub" style="margin-bottom:10px">
+        Step-by-step first-of-night alignment. Each step runs against the live mount.
+        If something fails, troubleshooting hints appear below the step.
+      </p>
+
+      <div class="step" id="align-step-1">
+        <h3><span class="step-num">1</span> Start INDI server</h3>
+        <div class="body">
+          Launches indiserver and connects to the Celestron mount. Run this once
+          per session before any motion.
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="alignStep('up')">Start</button>
+          <button class="secondary" onclick="alignStep('down')">Stop</button>
+        </div>
+        <div class="status" id="align-status-1"></div>
+        <div class="trouble" id="align-trouble-1" style="display:none"></div>
+      </div>
+
+      <div class="step" id="align-step-2">
+        <h3><span class="step-num">2</span> Orient north</h3>
+        <div class="body">
+          Drives the OTA northward for ~12 seconds via TELESCOPE_MOTION_NS. Gets
+          the scope roughly pointed at Polaris when the firmware horizon guard
+          would otherwise refuse coordinate slews.
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="alignStep('orient')">Orient</button>
+        </div>
+        <div class="status" id="align-status-2"></div>
+        <div class="trouble" id="align-trouble-2" style="display:none"></div>
+      </div>
+
+      <div class="step" id="align-step-3">
+        <h3><span class="step-num">3</span> Center Polaris (manual)</h3>
+        <div class="body">
+          Use the jog panel (or open Live tab and use arrow keys) to fine-center
+          Polaris in the eyepiece. When centered, hit Next to record this
+          pointing as the sync reference.
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="alignStep('done-center')">Polaris is centered</button>
+        </div>
+        <div class="status" id="align-status-3"></div>
+      </div>
+
+      <div class="step" id="align-step-4">
+        <h3><span class="step-num">4</span> Sync</h3>
+        <div class="body">
+          Captures a frame, plate-solves it with ASTAP, and syncs the mount to
+          the solved coordinates. Replaces the fake alignment with a real one.
+          Needs actual stars in the frame.
+        </div>
+        <div class="actions">
+          <button class="primary" onclick="alignStep('sync')">Plate-solve and sync</button>
+        </div>
+        <div class="status" id="align-status-4"></div>
+        <div class="trouble" id="align-trouble-4" style="display:none"></div>
+      </div>
+
+      <div class="step" id="align-step-5">
+        <h3><span class="step-num">5</span> Confirm</h3>
+        <div class="body">
+          Test by slewing to a bright known target.
+        </div>
+        <div class="actions">
+          <button class="secondary" onclick="alignSlewTest('Polaris')">Slew to Polaris</button>
+          <button class="secondary" onclick="alignSlewTest('Jupiter')">Slew to Jupiter</button>
+          <button class="secondary" onclick="alignSlewTest('Vega')">Slew to Vega</button>
+        </div>
+        <div class="status" id="align-status-5"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== CAPTURE ========== -->
+  <div class="panel" data-mode="capture">
+    <div class="capture-form">
+      <p class="sub">Smart capture: pick a target, Mira classifies it and runs the right pipeline.</p>
+
+      <div class="form-row">
+        <label>target</label>
+        <input id="cap-target" type="text" placeholder="Jupiter / M31 / Pleiades / Moon" />
+      </div>
+
+      <div class="classification" id="cap-classification">
+        <span class="label">CLASSIFICATION</span> -- type a name above
+      </div>
+
+      <div class="form-row">
+        <label>pipeline</label>
+        <select id="cap-pipeline">
+          <option value="">auto (from category)</option>
+          <option value="moon">moon (stretch + sharpen)</option>
+          <option value="lucky">lucky (planet burst + stack)</option>
+          <option value="live">live (deep-sky stack)</option>
+          <option value="single">single (one tuned frame)</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label>n frames</label>
+        <input id="cap-nframes" type="number" min="1" max="200" placeholder="30 (default)" />
+      </div>
+
+      <div class="form-row">
+        <label>also slew</label>
+        <input id="cap-slew" type="checkbox" style="flex:initial; width:18px; height:18px" />
+        <span class="sub">slew the mount to the target first (otherwise capture at current pointing)</span>
+      </div>
+
+      <div class="form-row">
+        <label></label>
+        <button class="primary" onclick="runCapture()">Capture</button>
+        <button class="danger" onclick="cancelCapture()" id="cap-cancel" style="display:none">Cancel</button>
+      </div>
+
+      <div class="status" id="cap-status"></div>
+    </div>
+  </div>
+
+  <!-- ========== SLEW ========== -->
+  <div class="panel" data-mode="slew">
+    <div class="capture-form">
+      <p class="sub">Slew the mount without capturing. Useful for testing pointing accuracy.</p>
+
+      <div class="form-row">
+        <label>target</label>
+        <input id="slew-target" type="text" placeholder="Polaris / Jupiter / M42" />
+      </div>
+
+      <div class="slew-actions">
+        <button class="primary" onclick="runSlew(false)">Slew (with plate-solve + sync)</button>
+        <button class="secondary" onclick="runSlew(true)">Slew only (skip solve)</button>
+        <button class="danger" onclick="abortSlew()">Abort</button>
+      </div>
+
+      <div class="status" id="slew-status"></div>
+
+      <div class="section-label" style="margin-top:18px">CURRENT POINTING</div>
+      <div class="kv"><span class="k">RA</span><span class="v" id="slew-ra">-</span></div>
+      <div class="kv"><span class="k">Dec</span><span class="v" id="slew-dec">-</span></div>
+    </div>
+  </div>
+
+  <!-- ========== TERMINAL ========== -->
+  <div class="panel" data-mode="terminal">
+    <div class="terminal">
+      <div class="term-out" id="term-out"><span class="info">type 'help' for available tools. arg syntax: tool_name arg=value arg2=value</span></div>
+      <div class="term-in-wrap">
+        <span class="term-in-prompt">mira&gt;</span>
+        <input id="term-in" class="term-in" autocomplete="off" spellcheck="false" placeholder="goto Jupiter">
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== STATUS ========== -->
+  <div class="panel" data-mode="status">
+    <div class="status-grid">
+      <div class="status-card">
+        <h3>MOUNT</h3>
+        <div class="kv"><span class="k">connected</span><span class="v" id="st-mount-conn">?</span></div>
+        <div class="kv"><span class="k">position</span><span class="v" id="st-mount-pos">?</span></div>
+        <div class="kv"><span class="k">slewing</span><span class="v" id="st-mount-slewing">?</span></div>
+      </div>
+      <div class="status-card">
+        <h3>CAMERA</h3>
+        <div class="kv"><span class="k">backend</span><span class="v" id="st-cam-src">?</span></div>
+        <div class="kv"><span class="k">reachable</span><span class="v" id="st-cam-up">?</span></div>
+        <div class="kv"><span class="k">last capture</span><span class="v" id="st-cam-last">?</span></div>
+      </div>
+      <div class="status-card">
+        <h3>OBSERVER</h3>
+        <div class="kv"><span class="k">lat</span><span class="v" id="st-lat">?</span></div>
+        <div class="kv"><span class="k">lon</span><span class="v" id="st-lon">?</span></div>
+        <div class="kv"><span class="k">UTC offset</span><span class="v" id="st-tz">?</span></div>
+      </div>
+      <div class="status-card">
+        <h3>PIPELINE</h3>
+        <div class="kv"><span class="k">phase</span><span class="v" id="st-phase">idle</span></div>
+        <div class="kv"><span class="k">target</span><span class="v" id="st-target">-</span></div>
+        <div class="kv"><span class="k">captures total</span><span class="v" id="st-cap-total">-</span></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer class="status">
+  <span id="foot-now">--:--:--</span>
+  <span id="foot-conn">disconnected</span>
+  <span class="right" id="foot-msg">ready</span>
+</footer>
+
+<script>
+// =============== state + helpers ===============
+let imgSrc = "stack";
+const $ = (id) => document.getElementById(id);
+function el(sel) { return document.querySelectorAll(sel); }
+
+function setMode(mode) {
+  el(".panel").forEach(p => p.classList.toggle("active", p.dataset.mode === mode));
+  el("nav button").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+}
+
+el("nav button").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+el(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    el(".tab").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    imgSrc = t.dataset.src;
+    refreshImage();
+  });
+});
+
+function fmtShutter(ms) {
+  if (ms == null) return "-";
+  if (ms >= 500) return (ms / 1000).toFixed(2) + "s";
+  if (ms >= 1) return ms.toFixed(1) + "ms";
+  return ms.toFixed(3) + "ms";
+}
+function fmtDeg(d) {
+  if (d == null) return "-";
+  return d.toFixed(4) + "°";
+}
+function nowHHMMSS() {
+  const d = new Date();
+  return d.toTimeString().slice(0,8);
+}
+
+// =============== live image + state ===============
+function refreshImage() {
+  const url = "/" + imgSrc + ".jpg?t=" + Date.now();
+  const probe = new Image();
+  probe.onload = () => {
+    $("frame").src = url;
+    $("frame").style.display = "block";
+    $("imgcol").classList.remove("empty");
+  };
+  probe.onerror = () => {
+    if (imgSrc === "stack") {
+      $("frame").style.display = "none";
+      $("imgcol").innerHTML = '<div class="placeholder">no stack yet -- start a capture</div>';
+    }
+  };
+  probe.src = url;
+}
+
+async function refreshState() {
+  try {
+    const r = await fetch("/state.json", { cache: "no-store" });
+    if (!r.ok) throw 0;
+    const s = await r.json();
+    $("kv-target").textContent = s.target || "-";
+    $("kv-category").textContent = s.category || "-";
+    $("kv-pipeline").textContent = s.pipeline || "-";
+    $("kv-phase").textContent = s.phase || "idle";
+    $("kv-message").textContent = s.message || "";
+    $("kv-iso").textContent = s.iso == null ? "-" : Math.round(s.iso);
+    $("kv-shutter").textContent = fmtShutter(s.shutter_ms);
+    $("kv-bias").textContent = s.bias == null ? "-" : s.bias.toFixed(2) + " EV";
+    $("kv-mean").textContent = s.mean_lum == null ? "-" : s.mean_lum.toFixed(1);
+    $("kv-captured").textContent = (s.frames_captured || 0) + " / " + (s.frames_target || 0);
+    $("kv-stacked").textContent = s.frames_stacked || 0;
+    $("kv-output").textContent = s.output_path || "-";
+    const pct = s.frames_target > 0 ? Math.min(100, 100 * (s.frames_captured || 0) / s.frames_target) : 0;
+    $("bar").style.width = pct + "%";
+    $("st-phase").textContent = s.phase || "idle";
+    $("st-target").textContent = s.target || "-";
+  } catch (e) {}
+}
+
+// =============== connection pills ===============
+async function refreshHealth() {
+  try {
+    const r = await fetch("/status.json", { cache: "no-store" });
+    if (!r.ok) throw 0;
+    const h = await r.json();
+    $("pill-mount").textContent = h.mount.connected ? "mount up" : "mount down";
+    $("pill-mount").className = "pill " + (h.mount.connected ? "ok" : "err");
+    $("pill-cam").textContent = h.camera.reachable ? "camera ok" : "camera down";
+    $("pill-cam").className = "pill " + (h.camera.reachable ? "ok" : "warn");
+    $("pill-jog").textContent = h.jog_enabled ? "jog enabled" : "jog off";
+    $("pill-jog").className = "pill " + (h.jog_enabled ? "ok" : "");
+    $("version").textContent = h.version || "v0";
+    $("st-mount-conn").textContent = h.mount.connected ? "yes" : "no";
+    if (h.mount.ra_deg != null) {
+      $("st-mount-pos").textContent = fmtDeg(h.mount.ra_deg) + " / " + fmtDeg(h.mount.dec_deg);
+      $("slew-ra").textContent = fmtDeg(h.mount.ra_deg);
+      $("slew-dec").textContent = fmtDeg(h.mount.dec_deg);
+    }
+    $("st-mount-slewing").textContent = h.mount.slewing ? "yes" : "no";
+    $("st-cam-src").textContent = h.camera.source || "?";
+    $("st-cam-up").textContent = h.camera.reachable ? "yes" : "no";
+    $("st-cam-last").textContent = h.camera.last_capture || "-";
+    if (h.observer) {
+      $("st-lat").textContent = h.observer.latitude_deg.toFixed(4) + "°";
+      $("st-lon").textContent = h.observer.longitude_deg.toFixed(4) + "°";
+      $("st-tz").textContent = h.observer.utc_offset_hours + "h";
+    }
+    $("st-cap-total").textContent = h.captures_total ?? "-";
+    $("foot-conn").textContent = h.mount.connected ? "mount connected" : "mount disconnected";
+  } catch (e) {
+    $("foot-conn").textContent = "server unreachable";
+  }
+}
+
+setInterval(refreshImage, 600);
+setInterval(refreshState, 800);
+setInterval(refreshHealth, 2500);
+setInterval(() => $("foot-now").textContent = nowHHMMSS(), 1000);
+
+// =============== jog ===============
+let jogEnabled = false;
+const heldKeys = new Set();
+const KEY_DIR = { ArrowUp: "north", ArrowDown: "south", ArrowLeft: "east", ArrowRight: "west" };
+async function jogInit() {
+  try {
+    const r = await fetch("/jog/info");
+    if (!r.ok) return;
+    jogEnabled = (await r.json()).enabled;
+  } catch {}
+}
+async function jogPost(path, body) {
+  try { await fetch(path, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) }); } catch {}
+}
+window.addEventListener("keydown", (e) => {
+  if (!jogEnabled) return;
+  if (e.target.tagName === "INPUT") return;  // don't capture when typing in a field
+  if (e.repeat) return;
+  if (e.key >= "1" && e.key <= "9") { jogPost("/jog/rate", {rate: parseInt(e.key)}); return; }
+  if (e.key === "q" || e.key === "Q") { jogPost("/jog/stop-all", {}); heldKeys.clear(); return; }
+  const dir = KEY_DIR[e.key];
+  if (!dir || heldKeys.has(e.key)) return;
+  e.preventDefault(); heldKeys.add(e.key);
+  jogPost("/jog", {direction: dir, action: "start"});
+});
+window.addEventListener("keyup", (e) => {
+  if (!jogEnabled) return;
+  if (e.target.tagName === "INPUT") return;
+  const dir = KEY_DIR[e.key];
+  if (!dir) return;
+  e.preventDefault(); heldKeys.delete(e.key);
+  jogPost("/jog", {direction: dir, action: "stop"});
+});
+jogInit();
+
+// =============== terminal ===============
+async function runTool(tool, args) {
+  const r = await fetch("/run-tool", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ tool, args })
+  });
+  return r.json();
+}
+function termLog(text, cls) {
+  const div = document.createElement("div");
+  if (cls) div.className = cls;
+  div.textContent = text;
+  $("term-out").appendChild(div);
+  $("term-out").scrollTop = $("term-out").scrollHeight;
+}
+function parseArgs(rest) {
+  const args = {};
+  const re = /(\w+)=("([^"]*)"|(\S+))/g;
+  let m;
+  while ((m = re.exec(rest)) !== null) {
+    let v = m[3] != null ? m[3] : m[4];
+    if (/^-?\d+$/.test(v)) v = parseInt(v);
+    else if (/^-?\d*\.\d+$/.test(v)) v = parseFloat(v);
+    else if (v === "true") v = true;
+    else if (v === "false") v = false;
+    args[m[1]] = v;
+  }
+  return args;
+}
+let toolList = [];
+async function loadTools() {
+  try { toolList = await (await fetch("/tools")).json(); } catch {}
+}
+loadTools();
+
+$("term-in").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  const line = $("term-in").value.trim();
+  if (!line) return;
+  $("term-in").value = "";
+  termLog("mira> " + line, "cmd");
+  const [tool, ...rest] = line.split(/\s+/);
+  if (tool === "help") {
+    termLog("available tools:", "info");
+    toolList.forEach(t => termLog("  " + t.name + " -- " + t.description, "info"));
+    return;
+  }
+  if (tool === "clear") { $("term-out").innerHTML = ""; return; }
+  // First positional arg becomes name/target_name etc. if no = signs
+  const argText = rest.join(" ");
+  const args = parseArgs(argText);
+  if (Object.keys(args).length === 0 && rest.length > 0) {
+    // Find tool's first param name
+    const t = toolList.find(x => x.name === tool);
+    if (t && t.first_param) {
+      args[t.first_param] = rest.join(" ").replace(/^"|"$/g, "");
+    }
+  }
+  try {
+    const resp = await runTool(tool, args);
+    if (resp.error) termLog("ERR: " + resp.error, "err");
+    else termLog(JSON.stringify(resp.result, null, 2), "ok");
+  } catch (e) {
+    termLog("ERR: " + e, "err");
+  }
+});
+
+// =============== align wizard ===============
+async function alignStep(step) {
+  const statusBox = ({"up":1,"down":1,"orient":2,"done-center":3,"sync":4}[step]);
+  const stEl = $("align-status-" + statusBox);
+  const trEl = $("align-trouble-" + statusBox);
+  if (stEl) stEl.textContent = "running...";
+  if (trEl) trEl.style.display = "none";
+  try {
+    let resp;
+    if (step === "up")           resp = await fetch("/align/up", {method:"POST"});
+    else if (step === "down")    resp = await fetch("/align/down", {method:"POST"});
+    else if (step === "orient")  resp = await fetch("/align/orient", {method:"POST"});
+    else if (step === "done-center") resp = await fetch("/align/center-ready", {method:"POST"});
+    else if (step === "sync")    resp = await fetch("/align/sync", {method:"POST"});
+    const data = await resp.json();
+    if (resp.ok && data.ok) {
+      stEl.textContent = data.message || "ok";
+      stEl.classList.remove("err");
+      // Mark step done
+      const stepN = ({"up":1,"down":1,"orient":2,"done-center":3,"sync":4}[step]);
+      $("align-step-" + stepN).classList.add("done");
+      $("align-step-" + stepN).classList.remove("active");
+      // Activate next
+      const nextN = (stepN || 0) + 1;
+      const nextEl = $("align-step-" + nextN);
+      if (nextEl) nextEl.classList.add("active");
+    } else {
+      stEl.textContent = "FAILED";
+      stEl.classList.add("err");
+      if (data.troubleshoot && trEl) {
+        trEl.textContent = data.troubleshoot;
+        trEl.style.display = "block";
+      }
+    }
+  } catch (e) {
+    stEl.textContent = "ERROR: " + e;
+    stEl.classList.add("err");
+  }
+}
+async function alignSlewTest(target) {
+  $("align-status-5").textContent = "slewing to " + target + "...";
+  $("align-status-5").classList.remove("err");
+  try {
+    const r = await fetch("/run-tool", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ tool: "goto", args: { target_name: target, auto_capture: false } })
+    });
+    const data = await r.json();
+    if (data.error) {
+      $("align-status-5").textContent = "FAILED: " + data.error;
+      $("align-status-5").classList.add("err");
+    } else {
+      $("align-status-5").textContent = "arrived at " + target;
+    }
+  } catch (e) { $("align-status-5").textContent = "ERROR: " + e; }
+}
+
+// =============== capture ===============
+let capClassifyTimer = null;
+$("cap-target").addEventListener("input", () => {
+  clearTimeout(capClassifyTimer);
+  capClassifyTimer = setTimeout(classifyNow, 300);
+});
+async function classifyNow() {
+  const name = $("cap-target").value.trim();
+  if (!name) {
+    $("cap-classification").innerHTML = '<span class="label">CLASSIFICATION</span> -- type a name above';
+    return;
+  }
+  try {
+    const r = await runTool("classify_target", { target_name: name });
+    if (r.error) {
+      $("cap-classification").textContent = "could not classify: " + r.error;
+    } else {
+      const c = r.result;
+      $("cap-classification").innerHTML =
+        '<span class="label">CLASSIFICATION</span><br>' +
+        '<strong>' + c.name + '</strong> &rarr; ' + c.category +
+        ' &rarr; <em>' + c.pipeline + '</em> pipeline' +
+        '<br><span style="color:var(--red-dim)">' + c.reason + '</span>' +
+        '<br>preset: ISO ' + c.preset.iso + ' @ ' + c.preset.duration_ms + 'ms';
+    }
+  } catch (e) {}
+}
+async function runCapture() {
+  const name = $("cap-target").value.trim();
+  if (!name) return;
+  const pipeline = $("cap-pipeline").value || null;
+  const nFrames = $("cap-nframes").value ? parseInt($("cap-nframes").value) : null;
+  const alsoSlew = $("cap-slew").checked;
+  const tool = alsoSlew ? "goto" : "smart_capture";
+  const args = alsoSlew
+    ? { target_name: name, auto_capture: true }
+    : { target_name: name, pipeline, n_frames: nFrames };
+  $("cap-status").textContent = "starting...";
+  setMode("live");  // switch to live so user sees progress
+  try {
+    const r = await runTool(tool, args);
+    if (r.error) $("cap-status").textContent = "FAILED: " + r.error;
+    else $("cap-status").textContent = "done: " + JSON.stringify(r.result);
+  } catch (e) { $("cap-status").textContent = "ERROR: " + e; }
+}
+async function cancelCapture() { /* TODO: kill button when smart_capture supports interruption */ }
+
+// =============== slew ===============
+async function runSlew(skipSolve) {
+  const target = $("slew-target").value.trim();
+  if (!target) return;
+  $("slew-status").textContent = "running...";
+  try {
+    const r = await runTool("goto", {
+      target_name: target,
+      auto_capture: false,
+    });
+    if (r.error) $("slew-status").textContent = "FAILED: " + r.error;
+    else $("slew-status").textContent = "arrived at " + target;
+  } catch (e) { $("slew-status").textContent = "ERROR: " + e; }
+}
+async function abortSlew() {
+  try { await runTool("orient", { drive_seconds: 0 }); } catch {}
+  $("slew-status").textContent = "abort sent";
+}
+
+refreshHealth();
+</script>
+
+</body>
+</html>
