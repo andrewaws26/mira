@@ -86,6 +86,8 @@ class _PreviewHandler(BaseHTTPRequestHandler):
             self._handle_jog_stop_all()
         elif path == "/run-tool":
             self._handle_run_tool()
+        elif path == "/chat":
+            self._handle_chat()
         elif path == "/align/up":
             self._handle_align("up")
         elif path == "/align/down":
@@ -320,6 +322,28 @@ class _PreviewHandler(BaseHTTPRequestHandler):
                 "error": f"{type(e).__name__}: {e}",
                 "trace": traceback.format_exc().splitlines()[-6:],
             })
+
+    # ------------------------------------------------------------------
+    # /chat  - LLM-backed natural language interface to tools
+    # ------------------------------------------------------------------
+    def _handle_chat(self) -> None:
+        if self.mount_ctx is None:
+            self.send_error(503, "chat requires a ToolContext")
+            return
+        body = self._read_json()
+        message = body.get("message")
+        history = body.get("history") or []
+        if not isinstance(message, str) or not message.strip():
+            self.send_error(400, "expected {message: str, history?: [...]}")
+            return
+        from . import mira_chat
+        from . import tools as tool_layer
+        try:
+            result = mira_chat.run_chat(message, history, tool_layer, self.mount_ctx)
+            self._send_json(result)
+        except Exception as e:
+            logger.exception("chat failed")
+            self._send_json({"error": f"{type(e).__name__}: {e}"})
 
     # ------------------------------------------------------------------
     # /align/*  - step-by-step alignment wizard
