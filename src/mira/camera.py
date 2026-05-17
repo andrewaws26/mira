@@ -82,10 +82,16 @@ class Camera:
         device_name: str = "iPhone",
         capture_dir: Path | str = Path("~/mira/captures"),
         warmup_seconds: float = 1.0,
+        flip_180: bool = True,
     ) -> None:
         self.device_name = device_name
         self.capture_dir = Path(capture_dir).expanduser()
         self.warmup_seconds = warmup_seconds
+        # If True, post-process every capture to rotate 180 degrees. The
+        # NexStar 130SLT (and Newtonian reflectors in general) invert the
+        # image, so a software flip restores real-world orientation. ASTAP
+        # plate-solving works either way.
+        self.flip_180 = flip_180
 
     def ensure_dir(self) -> Path:
         """Make sure today's capture subdirectory exists. Returns the path."""
@@ -94,7 +100,7 @@ class Camera:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def capture(self, filename: str | None = None, warmup: float | None = None) -> Path:
+    def capture(self, filename: str | Path | None = None, warmup: float | None = None) -> Path:
         """Take a single still image. Returns the path to the saved file.
 
         Args:
@@ -140,6 +146,37 @@ class Camera:
                 f"imagesnap reported success but no file at {out_path}. "
                 f"stdout: {result.stdout.strip()}"
             )
+        if self.flip_180:
+            _flip_180_in_place(out_path)
         elapsed = time.monotonic() - t0
         logger.info("captured %s (%d bytes) in %.2fs", out_path, out_path.stat().st_size, elapsed)
         return out_path
+
+
+def _flip_180_in_place(path: Path) -> None:
+    """Rotate a JPG 180 degrees in place using ffmpeg.
+
+    Newtonian reflectors invert the image. This restores real-world
+    orientation so the saved file matches what the eye expects. If ffmpeg
+    is missing the original file is left untouched and a warning logged;
+    plate-solving is unaffected by orientation either way.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        logger.warning("ffmpeg not on PATH; skipping 180 flip on %s", path)
+        return
+    tmp = path.with_suffix(path.suffix + ".flip.tmp")
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", str(path),
+             "-vf", "hflip,vflip", "-q:v", "2", str(tmp)],
+            capture_output=True, text=True, timeout=30.0,
+        )
+        if result.returncode != 0 or not tmp.exists():
+            logger.warning("ffmpeg flip failed: %s", result.stderr.strip()[:200])
+            tmp.unlink(missing_ok=True)
+            return
+        tmp.replace(path)
+    except subprocess.TimeoutExpired:
+        logger.warning("ffmpeg flip timed out on %s", path)
+        tmp.unlink(missing_ok=True)

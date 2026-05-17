@@ -23,6 +23,10 @@ from .camera import Camera, CameraError
 from .config import CameraConfig, Config, load_config, setup_logging
 from .ephemeris import Ephemeris, NameNotFoundError, get_ephemeris
 from .iphone_camera import IphoneCamera, IphoneCameraConfig
+from .exposure_tuning import tune_for_target, PRESETS as EXPOSURE_PRESETS
+from .stacking import lucky_image, live_stack, StackResult
+from .moon_processing import process_moon_frame
+from .target_type import classify_with_confidence
 from .mount import CelestronMount, MountError, ObserverInfo
 from .narration import CompositionError, CompositionResult, compose
 from .sfx import SfxError, SfxResult, generate as generate_sfx_audio
@@ -1700,8 +1704,130 @@ def orient(*, ctx: ToolContext | None = None, drive_seconds: float = 12.0) -> bo
     return True
 
 
-def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
-    """Plate-solve current pointing, sync the mount, and slew to a named target.
+def smart_capture(
+    target_name: str,
+    *,
+    ctx: ToolContext | None = None,
+    pipeline: Optional[str] = None,
+    n_frames: Optional[int] = None,
+    out_path: Optional[Path | str] = None,
+) -> Optional[Path]:
+    """Capture the current pointing with target-aware processing.
+
+    Only works when the camera backend is IphoneCamera (manual ISO/shutter
+    + lucky imaging needs the MiraCam app). With imagesnap, falls back to
+    capture_frame() unchanged.
+
+    Pipeline selection (auto-picked from target type if pipeline=None):
+        - "moon"   : single frame, stretch + unsharp mask
+        - "lucky"  : 30-frame burst, sharpness rank, keep top 30%, mean stack
+                     (planets, moon, double stars, bright clusters)
+        - "live"   : 30-frame integration with phase-correlation alignment
+                     (nebulae, galaxies, dim clusters)
+        - "single" : one tuned capture (stars, fallback)
+
+    Returns the path to the final processed image, or None on failure.
+    """
+    c = _ctx(ctx)
+    cam = c.camera
+
+    # Classify target -> category -> default pipeline
+    category, reason = classify_with_confidence(target_name)
+    if pipeline is None:
+        pipeline = _default_pipeline_for(category)
+    logger.info(
+        "smart_capture: target=%s -> category=%s (%s) -> pipeline=%s",
+        target_name, category, reason, pipeline,
+    )
+
+    if not isinstance(cam, IphoneCamera):
+        # imagesnap fallback: single capture, no exposure tuning available
+        logger.info("smart_capture: imagesnap backend, falling back to capture_frame()")
+        return capture_frame(ctx=c)
+
+    # Step 1: auto-tune exposure for this target type
+    _speak(c, f"[softly] Tuning exposure for {target_name}.")
+    tune = tune_for_target(cam, category)
+    logger.info(
+        "smart_capture: tune %s in %d steps -> ISO %.0f, %.2fms",
+        "converged" if tune.converged else "did not converge",
+        tune.steps, tune.final_iso, tune.final_duration_ms,
+    )
+
+    # Step 2: capture via the chosen pipeline
+    if pipeline == "lucky":
+        n = n_frames or 30
+        _speak(c, f"[curious] Capturing {n} frames for lucky imaging.")
+        try:
+            result = lucky_image(cam, n_frames=n, keep_pct=0.30)
+            return _publish(result, out_path)
+        except Exception as e:
+            logger.error("lucky_image failed: %s", e)
+            _speak(c, "Lucky imaging failed. Falling back to single capture.")
+            pipeline = "single"
+
+    if pipeline == "live":
+        n = n_frames or 30
+        _speak(c, f"[warmly] Live stacking {n} frames. This will take a moment.")
+        try:
+            result = live_stack(cam, n_frames=n, pause_s=0.5)
+            return _publish(result, out_path)
+        except Exception as e:
+            logger.error("live_stack failed: %s", e)
+            _speak(c, "Live stack failed. Falling back to single capture.")
+            pipeline = "single"
+
+    if pipeline == "moon":
+        raw = cam.capture()
+        try:
+            processed = process_moon_frame(raw)
+            if out_path:
+                final = Path(out_path).expanduser()
+                final.parent.mkdir(parents=True, exist_ok=True)
+                processed.rename(final)
+                return final
+            return processed
+        except Exception as e:
+            logger.error("moon processing failed: %s", e)
+            return raw
+
+    # "single" -- one tuned capture, no post-processing
+    raw = cam.capture(out_path) if out_path else cam.capture()
+    return raw
+
+
+def _default_pipeline_for(category: str) -> str:
+    """Map exposure-preset category to capture pipeline."""
+    return {
+        "moon":    "moon",
+        "planet":  "lucky",
+        "cluster": "live",
+        "nebula":  "live",
+        "galaxy":  "live",
+        "star":    "single",
+        "default": "single",
+    }.get(category, "single")
+
+
+def _publish(result: StackResult, out_path: Optional[Path | str]) -> Path:
+    """Move a StackResult's output to the user-requested location if given."""
+    if out_path is None:
+        return result.output_path
+    final = Path(out_path).expanduser()
+    final.parent.mkdir(parents=True, exist_ok=True)
+    result.output_path.rename(final)
+    return final
+
+
+def goto(
+    target_name: str,
+    *,
+    auto_capture: bool = True,
+    capture_out: Optional[Path | str] = None,
+    ctx: ToolContext | None = None,
+) -> bool:
+    """Plate-solve current pointing, sync the mount, slew to target, optionally
+    capture with the target-aware smart pipeline.
 
     This is the primary headline operation. The flow is:
       1. Resolve target name to apparent RA/Dec.
@@ -1709,6 +1835,9 @@ def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
       3. Plate-solve to learn true current pointing.
       4. Sync the mount to that solved position.
       5. Slew to the target.
+      6. (if auto_capture and iPhone backend) tune exposure for target type,
+         then capture via the appropriate pipeline (lucky imaging for planets,
+         live stack for deep-sky, stretch+sharpen for moon, single for stars).
 
     No traditional star alignment is required. The user does a deliberately
     bad fake alignment via the hand controller; this routine overwrites it.
@@ -1716,6 +1845,8 @@ def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
     Args:
         target_name: anything `get_target_coordinates` accepts, e.g.
             "Jupiter", "M31", "Vega".
+        auto_capture: if True, run smart_capture after slew completes.
+        capture_out: optional path to write the final image to.
 
     Returns:
         True if the mount reached the target. False if any step failed.
@@ -1793,6 +1924,18 @@ def goto(target_name: str, *, ctx: ToolContext | None = None) -> bool:
     else:
         logger.warning("goto %s: slew did not finish in time", target_name)
         _speak(c, f"{target_name} slew did not complete.")
+        return False
+
+    # 6. Optional smart-pipeline capture
+    if auto_capture:
+        try:
+            final = smart_capture(target_name, ctx=c, out_path=capture_out)
+            if final is not None:
+                logger.info("goto %s: captured -> %s", target_name, final)
+        except Exception as e:
+            logger.error("goto %s: smart_capture failed: %s", target_name, e)
+            # Don't fail the goto -- the slew already succeeded.
+
     return success
 
 

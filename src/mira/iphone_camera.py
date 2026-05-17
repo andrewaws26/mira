@@ -34,7 +34,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn, Optional
 
@@ -71,6 +72,11 @@ class IphoneCameraConfig:
     """Default per-request HTTP timeout. Photo capture uses 30s."""
 
     capture_timeout_s: float = 30.0
+
+    # Where to drop unnamed captures. Mirrors Camera.capture_dir default.
+    capture_dir: Path = field(
+        default_factory=lambda: Path("~/mira/captures").expanduser()
+    )
 
 
 class IphoneCamera:
@@ -112,12 +118,17 @@ class IphoneCamera:
     # Capture
     # ------------------------------------------------------------------
 
-    def capture(self, out_path: Path | str) -> Path:
-        """Capture a JPEG, write to out_path, return the Path.
+    def capture(self, filename: str | Path | None = None) -> Path:
+        """Capture a JPEG and write it to disk. Returns the Path.
 
-        Camera-compatible interface so this can drop in for camera.Camera.
+        Camera-compatible signature so this drops in for camera.Camera. When
+        filename is omitted, generates a timestamped name in config.capture_dir.
         """
-        out_path = Path(out_path).expanduser()
+        if filename is None:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+            out_path = self.config.capture_dir / f"iphone-{stamp}.jpg"
+        else:
+            out_path = Path(filename).expanduser()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         jpeg_bytes = self._get("/preview.jpg", timeout=self.config.capture_timeout_s, raw=True)
         out_path.write_bytes(jpeg_bytes)
