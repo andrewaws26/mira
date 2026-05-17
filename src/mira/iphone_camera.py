@@ -208,25 +208,47 @@ class IphoneCamera:
         # Explicit Content-Length: Python's urllib doesn't always set it
         # automatically, and the MiraCam server uses it to know when the
         # body has finished arriving across TCP segments.
-        req = urllib.request.Request(
-            url, data=data, method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Content-Length": str(len(data)),
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.config.request_timeout_s) as resp:
-                body = resp.read()
-        except urllib.error.HTTPError as e:
-            self._raise_http_error(e, path, "POST")
-        except urllib.error.URLError as e:
-            raise IphoneCameraTimeout(f"POST {path} failed: {e.reason}") from e
-        except TimeoutError as e:
-            raise IphoneCameraTimeout(
-                f"POST {path} timed out after {self.config.request_timeout_s}s"
-            ) from e
-        return json.loads(body)
+        headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(data)),
+        }
+        # One retry on transient body-parse failures. The iOS HTTP parser
+        # occasionally dispatches before the body has fully arrived in a
+        # second TCP segment, and the server returns 400 "must provide".
+        # The retry happens fresh (new connection, new send) and usually
+        # succeeds. Cheaper than a stronger handshake.
+        last_err: Optional[Exception] = None
+        for attempt in range(2):
+            req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=self.config.request_timeout_s) as resp:
+                    body = resp.read()
+                return json.loads(body)
+            except urllib.error.HTTPError as e:
+                err_body = ""
+                try:
+                    err_body = e.read().decode(errors="replace")
+                except Exception:
+                    pass
+                if e.code == 400 and "must provide" in err_body and attempt == 0:
+                    logger.debug("POST %s: 400 'must provide' on attempt %d, retrying", path, attempt)
+                    time.sleep(0.15)
+                    continue
+                # Reconstruct the error and raise via the normal path
+                if hasattr(e, "fp") and e.fp is not None:
+                    pass
+                e._mira_body = err_body  # type: ignore[attr-defined]
+                self._raise_http_error_with_body(e, err_body, path, "POST")
+            except urllib.error.URLError as e:
+                last_err = e
+                raise IphoneCameraTimeout(f"POST {path} failed: {e.reason}") from e
+            except TimeoutError as e:
+                last_err = e
+                raise IphoneCameraTimeout(
+                    f"POST {path} timed out after {self.config.request_timeout_s}s"
+                ) from e
+        # Should not reach here; the retry loop either returns or raises.
+        raise IphoneCameraError(f"POST {path}: exhausted retries: {last_err}")
 
     @staticmethod
     def _raise_http_error(e: urllib.error.HTTPError, path: str, method: str) -> NoReturn:
@@ -235,6 +257,17 @@ class IphoneCamera:
             detail = json.loads(e.read())
         except Exception:
             detail = {"error": "unknown", "status": e.code}
+        IphoneCamera._raise_http_error_with_body(e, str(detail), path, method)
+
+    @staticmethod
+    def _raise_http_error_with_body(
+        e: urllib.error.HTTPError, body: str, path: str, method: str,
+    ) -> NoReturn:
+        """Same as _raise_http_error but body was already read by caller."""
+        try:
+            detail = json.loads(body)
+        except Exception:
+            detail = {"error": "unknown", "status": e.code, "body": body[:200]}
         msg = f"{method} {path} -> HTTP {e.code}: {detail}"
         if e.code == 503:
             raise IphoneCameraNotReady(msg) from e
