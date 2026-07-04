@@ -111,6 +111,8 @@ de440s.bsp
 !tests/fixtures/*.png
 !tests/fixtures/*.fits
 !tests/fixtures/*.wcs
+# allow documentation images
+!docs/*.png
 
 # Logs
 *.log

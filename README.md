@@ -448,6 +448,10 @@ Claude picks the right tool from the descriptions Mira ships in the MCP schema. 
 
 ## Architecture
 
+![System architecture](docs/architecture.png)
+
+The goto loop needs no star alignment: resolve the name, capture a frame, plate-solve it, sync the mount to the solved coordinates, slew, then run the target-aware smart-capture pipeline. Everything runs on the Mac and local network; the only cloud call is optional ElevenLabs narration.
+
 Three layers:
 
 1. **Tool functions** (`mira/tools.py`): standalone Python functions that do the actual work. The main set: `get_target_coordinates`, `capture_frame`, `plate_solve`, `sync_mount`, `slew_to`, `get_mount_position`, `wait_for_slew_complete`, `get_observer_location`, `goto`, `smart_capture`, `classify_target`, `orient`. Every one has type hints and docstrings, and is unit-tested with mocked hardware.
